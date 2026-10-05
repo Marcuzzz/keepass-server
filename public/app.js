@@ -256,25 +256,73 @@ async function renderUsers() {
   );
 }
 
+/**
+ * Checkbox list of users with a filter, select all / deselect all (of the visible users) and
+ * shift-click to toggle a range. Returns the element and a function giving the checked usernames.
+ */
+function userPicker(users, selected = [], label = 'Members') {
+  const chosen = new Set(selected);
+  let last = null;
+  const boxes = users.map((u) => h('input', { type: 'checkbox', value: u.username, checked: chosen.has(u.username) }));
+  const items = users.map((u, i) => h('label', { class: 'pick' }, boxes[i], u.username,
+    u.disabled ? [' ', h('span', { class: 'badge warn' }, 'disabled')] : null));
+  const visible = () => boxes.filter((_, i) => !items[i].hidden);
+  const setAll = (checked) => visible().forEach((b) => { b.checked = checked; });
+  const count = h('span', { class: 'muted' });
+  const updateCount = () => { count.textContent = `${boxes.filter((b) => b.checked).length} of ${users.length} selected`; };
+
+  const list = h('div', { class: 'picker-list', role: 'group', 'aria-label': label, onclick: (e) => {
+    const i = boxes.indexOf(e.target);
+    if (i < 0) return;
+    if (e.shiftKey && last !== null) {
+      const [from, to] = [Math.min(last, i), Math.max(last, i)];
+      for (let j = from; j <= to; j++) if (!items[j].hidden) boxes[j].checked = boxes[i].checked;
+    }
+    last = i;
+    updateCount();
+  } }, users.length ? items : h('span', { class: 'muted' }, 'No users yet'));
+
+  const filter = h('input', { type: 'search', placeholder: 'Filter users', 'aria-label': `Filter ${label.toLowerCase()}`, autocomplete: 'off', oninput: () => {
+    const q = filter.value.trim().toLowerCase();
+    users.forEach((u, i) => { items[i].hidden = !u.username.toLowerCase().includes(q); });
+  }, onkeydown: (e) => { if (e.key === 'Enter') e.preventDefault(); } });
+
+  updateCount();
+  const el = h('div', { class: 'picker' },
+    h('div', { class: 'row' }, filter,
+      h('button', { type: 'button', onclick: () => { setAll(true); updateCount(); } }, 'Select all'),
+      h('button', { type: 'button', onclick: () => { setAll(false); updateCount(); } }, 'Deselect all'),
+      count),
+    list,
+    h('p', { class: 'muted' }, 'Shift-click to select or deselect a range.'));
+  return { el, values: () => boxes.filter((b) => b.checked).map((b) => b.value) };
+}
+
 async function renderGroups() {
-  const groups = await api('GET', '/groups');
-  const create = h('form', { class: 'row', onsubmit: action(async () => {
-    const members = field(create, 'members').split(',').map((m) => m.trim()).filter(Boolean);
-    await api('POST', '/groups', { name: field(create, 'name'), members });
+  const [groups, users] = await Promise.all([api('GET', '/groups'), api('GET', '/users')]);
+  const newMembers = userPicker(users, [], 'New group members');
+  const create = h('form', { class: 'stack wide', onsubmit: action(async () => {
+    await api('POST', '/groups', { name: field(create, 'name'), members: newMembers.values() });
     return 'Group created';
   }, renderGroups) },
-  h('input', { name: 'name', placeholder: 'Group name', required: true, autocomplete: 'off', 'aria-label': 'Group name' }),
-  h('input', { name: 'members', placeholder: 'Members (comma separated, optional)', autocomplete: 'off', 'aria-label': 'Members' }),
-  h('button', { class: 'primary', type: 'submit' }, 'Create group'));
+  h('label', {}, 'Group name', h('input', { name: 'name', required: true, autocomplete: 'off' })),
+  h('div', { class: 'field' }, h('span', { class: 'muted' }, 'Members (optional)'), newMembers.el),
+  h('div', {}, h('button', { class: 'primary', type: 'submit' }, 'Create group')));
 
-  const addMember = (g) => {
-    const form = h('form', { class: 'row', onsubmit: action(async () => {
-      await api('PUT', `/groups/${g.id}/members/${encodeURIComponent(field(form, 'username'))}`);
-      return 'Member added';
+  const editMembers = (g) => {
+    const current = g.members.map((m) => m.username);
+    const picker = userPicker(users, current, `Members of ${g.name}`);
+    const form = h('form', { class: 'stack wide', onsubmit: action(async () => {
+      const next = new Set(picker.values());
+      const add = [...next].filter((u) => !current.includes(u));
+      const remove = current.filter((u) => !next.has(u));
+      for (const u of add) await api('PUT', `/groups/${g.id}/members/${encodeURIComponent(u)}`);
+      for (const u of remove) await api('DELETE', `/groups/${g.id}/members/${encodeURIComponent(u)}`);
+      return add.length || remove.length ? `Members saved (+${add.length} −${remove.length})` : 'No changes';
     }, renderGroups) },
-    h('input', { name: 'username', placeholder: 'Username', required: true, autocomplete: 'off', 'aria-label': `Add member to ${g.name}` }),
-    h('button', { type: 'submit' }, 'Add'));
-    return form;
+    picker.el,
+    h('div', {}, h('button', { class: 'primary', type: 'submit' }, 'Save members')));
+    return h('details', { class: 'edit-members' }, h('summary', {}, 'Edit members'), form);
   };
 
   main.replaceChildren(
@@ -287,7 +335,7 @@ async function renderGroups() {
             await api('DELETE', `/groups/${g.id}/members/${encodeURIComponent(m.username)}`);
             return `${m.username} removed`;
           }, renderGroups) }, '×'))),
-          addMember(g)),
+          editMembers(g)),
         h('td', {}, fmtDate(g.createdAt)),
         h('td', { class: 'actions' },
           h('button', { onclick: action(async () => {

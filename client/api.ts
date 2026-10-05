@@ -144,6 +144,11 @@ export class KpsApi {
     return this.json<VaultInfo>('PATCH', `/api/v1/vaults/${encodeURIComponent(id)}`, { name });
   }
 
+  /** Owner: deletes a vault with all its revisions and conflict copies. */
+  async deleteVault(id: string): Promise<void> {
+    await this.json('DELETE', `/api/v1/vaults/${encodeURIComponent(id)}`);
+  }
+
   /** Copies a vault (current database only); the caller owns the copy. `copySharing` needs the owner role. */
   duplicateVault(id: string, name?: string, copySharing = false) {
     return this.json<VaultInfo>('POST', `/api/v1/vaults/${encodeURIComponent(id)}/duplicate`, { ...(name ? { name } : {}), copySharing });

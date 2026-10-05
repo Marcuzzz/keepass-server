@@ -343,6 +343,16 @@ describe('rename and duplicate', () => {
     await assert.rejects(reader.renameVault(vault.id, 'nope'), (err: ApiError) => err.status === 403);
   });
 
+  it('Should_DeleteVault_When_Owner', async () => {
+    const vault = await admin.createVault('delete-me');
+    await admin.upload(vault.id, kdbxA, 0);
+    const editor = await createUser(server.url, admin.token!, 'delete-editor');
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/members/delete-editor`, { role: 'editor' });
+    await assert.rejects(editor.deleteVault(vault.id), (err: ApiError) => err.status === 403);
+    await admin.deleteVault(vault.id);
+    await assert.rejects(admin.getVault(vault.id), (err: ApiError) => err.status === 404);
+  });
+
   it('Should_CopyCurrentDatabaseOnly_When_Duplicating', async () => {
     const source = await admin.createVault('dup-source');
     await admin.upload(source.id, kdbxA, 0);
@@ -413,6 +423,16 @@ describe('API documentation', () => {
       .map((r) => `${r.method} ${r.path}`)
       .sort();
     assert.deepEqual(documented, routed);
+  });
+
+  it('Should_ServeOnlyWhitelistedVendorFiles_When_RequestingFontAwesome', async () => {
+    const css = await call(server.url, undefined, 'GET', '/vendor/fontawesome/css/solid.min.css');
+    assert.equal(css.status, 200);
+    assert.match(await css.text(), /fa-solid-900\.woff2/);
+    const font = await call(server.url, undefined, 'GET', '/vendor/fontawesome/webfonts/fa-solid-900.woff2');
+    assert.equal(font.headers.get('content-type'), 'font/woff2');
+    assert.equal((await call(server.url, undefined, 'GET', '/vendor/fontawesome/css/brands.min.css')).status, 404);
+    assert.equal((await call(server.url, undefined, 'GET', '/vendor/fontawesome/../../package.json')).status, 404);
   });
 
   it('Should_ServeDocsPage_When_RequestingApiDocs', async () => {

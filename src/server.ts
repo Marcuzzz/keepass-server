@@ -12,12 +12,21 @@ import { openApiSpec } from './openapi.ts';
 import { BlobStore } from './storage.ts';
 import { VaultService } from './vaults.ts';
 
-const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
+const ROOT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
+const FONTAWESOME_DIR = path.join(ROOT_DIR, 'node_modules', '@fortawesome', 'fontawesome-free');
+/** Third-party assets served from node_modules (the CSP allows no CDNs). Only these exact files. */
+const VENDOR_FILES: Record<string, string> = {
+  '/vendor/fontawesome/css/fontawesome.min.css': path.join(FONTAWESOME_DIR, 'css', 'fontawesome.min.css'),
+  '/vendor/fontawesome/css/solid.min.css': path.join(FONTAWESOME_DIR, 'css', 'solid.min.css'),
+  '/vendor/fontawesome/webfonts/fa-solid-900.woff2': path.join(FONTAWESOME_DIR, 'webfonts', 'fa-solid-900.woff2'),
+};
 const STATIC_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
 };
 
 const SECURITY_HEADERS = {
@@ -53,13 +62,14 @@ const STATIC_ALIASES: Record<string, string> = { '/': 'index.html', '/api/docs':
 
 function serveStatic(ctx: Ctx): boolean {
   if (ctx.req.method !== 'GET' && ctx.req.method !== 'HEAD') return false;
+  const vendor = VENDOR_FILES[ctx.url.pathname];
   const name = STATIC_ALIASES[ctx.url.pathname] ?? ctx.url.pathname.slice(1);
-  if (!/^[a-z0-9-]+\.[a-z]+$/.test(name)) return false;
-  const type = STATIC_TYPES[path.extname(name)];
-  const file = path.join(PUBLIC_DIR, name);
+  if (!vendor && !/^[a-z0-9-]+\.[a-z0-9]+$/.test(name)) return false;
+  const file = vendor ?? path.join(PUBLIC_DIR, name);
+  const type = STATIC_TYPES[path.extname(file)];
   if (!type || !fs.existsSync(file)) return false;
   const data = fs.readFileSync(file);
-  ctx.res.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
+  ctx.res.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length, 'Cache-Control': vendor ? 'public, max-age=86400' : 'no-cache' });
   ctx.res.end(ctx.req.method === 'HEAD' ? undefined : data);
   return true;
 }

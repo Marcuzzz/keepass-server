@@ -17,6 +17,14 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+/** Font Awesome icon (decorative; the button carries the label). */
+const icon = (name) => h('i', { class: `fa-solid fa-${name}`, 'aria-hidden': 'true' });
+/** Icon + text, for form buttons. */
+const withIcon = (name, text) => [icon(name), ' ', text];
+/** Icon-only button; `label` becomes the tooltip and the accessible name. */
+const iconButton = (name, label, attrs = {}) =>
+  h('button', { type: 'button', ...attrs, class: `icon ${attrs.class ?? ''}`.trim(), title: attrs.title ?? label, 'aria-label': label }, icon(name));
+
 function toast(message, isError = false) {
   const t = document.getElementById('toast');
   t.textContent = message;
@@ -88,7 +96,7 @@ function renderLogin() {
   h('h2', {}, 'Sign in'),
   h('label', {}, 'Username', h('input', { name: 'username', autocomplete: 'username', required: true })),
   h('label', {}, 'Password', h('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true })),
-  h('button', { class: 'primary', type: 'submit' }, 'Sign in'));
+  h('button', { class: 'primary', type: 'submit' }, withIcon('right-to-bracket', 'Sign in')));
   main.replaceChildren(form);
 }
 
@@ -98,6 +106,15 @@ async function renameVault(vault) {
   if (!name || name === vault.name) return null;
   await api('PATCH', `/vaults/${vault.id}`, { name });
   return `Renamed to "${name}"`;
+}
+
+/** Deletes a vault after the user typed its name; returns the toast message, or null when cancelled. */
+async function deleteVault(vault) {
+  const typed = window.prompt(`Delete vault "${vault.name}" with all its revisions and conflict copies? This cannot be undone.\n\nType the vault name to confirm:`);
+  if (typed === null) return null;
+  if (typed.trim() !== vault.name) throw new Error('Name did not match; nothing was deleted');
+  await api('DELETE', `/vaults/${vault.id}`);
+  return `Vault "${vault.name}" deleted`;
 }
 
 /** Copies a vault (current database only) and opens the copy. */
@@ -123,7 +140,7 @@ async function renderVaults() {
   groups.length ? h('label', { class: 'row' }, 'Share with group',
     h('select', { name: 'group', 'aria-label': 'Group' }, h('option', { value: '' }, '(none)'), groups.map((g) => h('option', { value: g.name }, g.name))),
     roleSelect('groupRole')) : null,
-  h('button', { class: 'primary', type: 'submit' }, 'Create vault'));
+  h('button', { class: 'primary', type: 'submit' }, withIcon('plus', 'Create vault')));
 
   main.replaceChildren(
     h('section', { class: 'card' }, h('h2', {}, 'Vaults'),
@@ -134,13 +151,14 @@ async function renderVaults() {
         h('td', {}, fmtDate(v.updatedAt)),
         h('td', {}, fmtSize(v.size)),
         h('td', { class: 'actions' },
-          v.revision ? h('button', { onclick: action(() => download(`/vaults/${v.id}/content`, `${v.name}.kdbx`)) }, 'Download') : null, ' ',
-          v.role === 'owner' ? h('button', { onclick: action(() => renameVault(v), renderVaults) }, 'Rename') : null, ' ',
-          h('button', { title: 'Copy this vault (current database, same master password)', onclick: action(async () => {
+          v.revision ? iconButton('download', 'Download', { onclick: action(() => download(`/vaults/${v.id}/content`, `${v.name}.kdbx`)) }) : null, ' ',
+          v.role === 'owner' ? iconButton('pen', 'Rename', { onclick: action(() => renameVault(v), renderVaults) }) : null, ' ',
+          iconButton('copy', 'Duplicate', { title: 'Copy this vault (current database, same master password)', onclick: action(async () => {
             const name = window.prompt(`Name for the copy of "${v.name}"`, `${v.name} (copy)`)?.trim();
             if (!name) return null;
             return duplicateVault(v, name, false);
-          }) }, 'Duplicate')),
+          }) }), ' ',
+          v.role === 'owner' ? iconButton('trash', 'Delete', { class: 'danger', onclick: action(() => deleteVault(v), renderVaults) }) : null),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'New vault'),
       h('p', { class: 'muted' }, 'Upload an existing database, or create an empty vault and let a client (KeePassDX, KeePassXC, kps) upload the first version.'),
@@ -163,7 +181,7 @@ async function renderVault(id) {
   }, rerender) },
   h('input', { name: 'username', placeholder: 'Username', required: true, 'aria-label': 'Username' }),
   roleSelect(),
-  h('button', { type: 'submit' }, 'Add / change'));
+  h('button', { type: 'submit' }, withIcon('plus', 'Add / change')));
 
   // Owners who are not administrators only see their own groups, so the name can also be typed.
   const addGroup = h('form', { class: 'row', onsubmit: action(async () => {
@@ -173,25 +191,25 @@ async function renderVault(id) {
   h('input', { name: 'group', placeholder: 'Group name', required: true, list: 'group-names', 'aria-label': 'Group name' }),
   h('datalist', { id: 'group-names' }, groups.map((g) => h('option', { value: g.name }))),
   roleSelect(),
-  h('button', { type: 'submit' }, 'Add / change'));
+  h('button', { type: 'submit' }, withIcon('plus', 'Add / change')));
 
   const rename = h('form', { class: 'row', onsubmit: action(async () => {
     await api('PATCH', `/vaults/${id}`, { name: field(rename, 'name') });
     return 'Renamed';
   }, rerender) },
   h('input', { name: 'name', value: vault.name, required: true, 'aria-label': 'Vault name' }),
-  h('button', { type: 'submit' }, 'Rename'),
+  h('button', { type: 'submit' }, withIcon('pen', 'Rename')),
   h('button', { type: 'button', class: 'danger', onclick: action(async () => {
-    if (!window.confirm(`Delete vault "${vault.name}" and all its revisions? This cannot be undone.`)) return null;
-    await api('DELETE', `/vaults/${id}`);
-    return 'Vault deleted';
-  }, renderVaults) }, 'Delete vault'));
+    const message = await deleteVault(vault);
+    if (message) await renderVaults();
+    return message;
+  }) }, withIcon('trash', 'Delete vault')));
 
   const duplicate = h('form', { class: 'row', onsubmit: action(() => duplicateVault(vault, field(duplicate, 'name'),
     isOwner && duplicate.elements.namedItem('copySharing').checked)) },
   h('input', { name: 'name', value: `${vault.name} (copy)`, required: true, maxlength: 200, 'aria-label': 'Name of the copy' }),
   isOwner ? h('label', { class: 'row' }, h('input', { name: 'copySharing', type: 'checkbox' }), 'Also copy members and groups') : null,
-  h('button', { type: 'submit' }, 'Duplicate'));
+  h('button', { type: 'submit' }, withIcon('copy', 'Duplicate')));
 
   main.replaceChildren(
     h('p', {}, h('a', { onclick: renderVaults }, '← All vaults')),
@@ -207,12 +225,12 @@ async function renderVault(id) {
       table(['Created', 'By', 'Base rev', 'Reason', ''], conflicts.map((c) => h('tr', {},
         h('td', {}, fmtDate(c.createdAt)), h('td', {}, `${c.username ?? '?'} · ${c.deviceName ?? ''}`), h('td', {}, c.baseRevision ?? '—'), h('td', {}, c.reason ?? ''),
         h('td', { class: 'actions' },
-          h('button', { onclick: action(() => download(`/vaults/${id}/conflicts/${c.id}/content`, `${vault.name}-conflict.kdbx`)) }, 'Download'), ' ',
-          canWrite ? h('button', { class: 'danger', onclick: action(async () => {
+          iconButton('download', 'Download', { onclick: action(() => download(`/vaults/${id}/conflicts/${c.id}/content`, `${vault.name}-conflict.kdbx`)) }), ' ',
+          canWrite ? iconButton('check', 'Resolved', { class: 'danger', onclick: action(async () => {
             if (!window.confirm('Delete this conflict copy?')) return null;
             await api('DELETE', `/vaults/${id}/conflicts/${c.id}`);
             return 'Conflict copy deleted';
-          }, rerender) }, 'Resolved') : null),
+          }, rerender) }) : null),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'Revisions'),
       table(['Rev', 'Saved', 'By', 'Based on', 'Size', ''], revisions.map((r) => h('tr', {},
@@ -222,31 +240,31 @@ async function renderVault(id) {
         h('td', {}, r.baseRevision ?? '—'),
         h('td', {}, fmtSize(r.size)),
         h('td', { class: 'actions' },
-          h('button', { onclick: action(() => download(`/vaults/${id}/revisions/${r.revision}/content`, `${vault.name}-r${r.revision}.kdbx`)) }, 'Download'), ' ',
-          canWrite && !r.current ? h('button', { onclick: action(async () => {
+          iconButton('download', 'Download', { onclick: action(() => download(`/vaults/${id}/revisions/${r.revision}/content`, `${vault.name}-r${r.revision}.kdbx`)) }), ' ',
+          canWrite && !r.current ? iconButton('clock-rotate-left', 'Restore', { onclick: action(async () => {
             if (!window.confirm(`Make revision ${r.revision} the current version? Devices will download it on their next sync.`)) return null;
             await api('POST', `/vaults/${id}/revisions/${r.revision}/restore`);
             return `Revision ${r.revision} restored`;
-          }, rerender) }, 'Restore') : null),
+          }, rerender) }) : null),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'Members'),
       h('p', { class: 'muted' }, 'Every member needs the vault\'s master password (and key file) to open it. Server accounts only control who can download and upload.'),
       table(['User', 'Role', ''], members.map((m) => h('tr', {},
         h('td', {}, m.username), h('td', {}, h('span', { class: 'badge' }, m.role)),
-        h('td', { class: 'actions' }, isOwner ? h('button', { class: 'danger', onclick: action(async () => {
+        h('td', { class: 'actions' }, isOwner ? iconButton('xmark', 'Remove', { class: 'danger', onclick: action(async () => {
           await api('DELETE', `/vaults/${id}/members/${encodeURIComponent(m.username)}`);
           return `${m.username} removed`;
-        }, rerender) }, 'Remove') : null),
+        }, rerender) }) : null),
       ))),
       isOwner ? [h('h3', {}, 'Add member'), addMember] : null),
     h('section', { class: 'card' }, h('h2', {}, 'Groups'),
       h('p', { class: 'muted' }, 'Every member of a group gets its role. A user\'s role is the highest of their own role and their groups\' roles.'),
       table(['Group', 'Role', ''], vaultGroups.map((g) => h('tr', {},
         h('td', {}, g.name), h('td', {}, h('span', { class: 'badge' }, g.role)),
-        h('td', { class: 'actions' }, isOwner ? h('button', { class: 'danger', onclick: action(async () => {
+        h('td', { class: 'actions' }, isOwner ? iconButton('xmark', 'Remove', { class: 'danger', onclick: action(async () => {
           await api('DELETE', `/vaults/${id}/groups/${encodeURIComponent(g.name)}`);
           return `Group ${g.name} removed`;
-        }, rerender) }, 'Remove') : null),
+        }, rerender) }) : null),
       ))),
       isOwner ? [h('h3', {}, 'Add group'), addGroup] : null),
   );
@@ -261,7 +279,7 @@ async function renderUsers() {
   h('input', { name: 'username', placeholder: 'Username', required: true, autocomplete: 'off', 'aria-label': 'Username' }),
   h('input', { name: 'password', type: 'password', placeholder: 'Password (min. 10)', required: true, minlength: 10, autocomplete: 'new-password', 'aria-label': 'Password' }),
   h('label', { class: 'row' }, h('input', { name: 'isAdmin', type: 'checkbox' }), 'Administrator'),
-  h('button', { class: 'primary', type: 'submit' }, 'Create user'));
+  h('button', { class: 'primary', type: 'submit' }, withIcon('user-plus', 'Create user')));
 
   main.replaceChildren(
     h('section', { class: 'card' }, h('h2', {}, 'Users'),
@@ -269,19 +287,19 @@ async function renderUsers() {
         h('td', {}, u.username), h('td', {}, u.isAdmin ? 'yes' : ''), h('td', {}, u.disabled ? h('span', { class: 'badge warn' }, 'disabled') : 'active'),
         h('td', {}, fmtDate(u.createdAt)),
         h('td', { class: 'actions' },
-          h('button', { onclick: action(async () => {
+          iconButton('key', 'Reset password', { onclick: action(async () => {
             const password = window.prompt(`New password for ${u.username} (min. 10 characters)`);
             if (!password) return null;
             await api('PATCH', `/users/${u.id}`, { password });
             return 'Password changed; the user\'s sessions were signed out';
-          }, renderUsers) }, 'Reset password'), ' ',
-          h('button', { onclick: action(async () => { await api('PATCH', `/users/${u.id}`, { isAdmin: !u.isAdmin }); }, renderUsers) }, u.isAdmin ? 'Revoke admin' : 'Make admin'), ' ',
-          h('button', { onclick: action(async () => { await api('PATCH', `/users/${u.id}`, { disabled: !u.disabled }); }, renderUsers) }, u.disabled ? 'Enable' : 'Disable'), ' ',
-          h('button', { class: 'danger', onclick: action(async () => {
+          }, renderUsers) }), ' ',
+          iconButton(u.isAdmin ? 'user-minus' : 'user-shield', u.isAdmin ? 'Revoke admin' : 'Make admin', { onclick: action(async () => { await api('PATCH', `/users/${u.id}`, { isAdmin: !u.isAdmin }); }, renderUsers) }), ' ',
+          iconButton(u.disabled ? 'circle-check' : 'ban', u.disabled ? 'Enable' : 'Disable', { onclick: action(async () => { await api('PATCH', `/users/${u.id}`, { disabled: !u.disabled }); }, renderUsers) }), ' ',
+          iconButton('trash', 'Delete', { class: 'danger', onclick: action(async () => {
             if (!window.confirm(`Delete user ${u.username}?`)) return null;
             await api('DELETE', `/users/${u.id}`);
             return 'User deleted';
-          }, renderUsers) }, 'Delete')),
+          }, renderUsers) })),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'New user'), create),
   );
@@ -321,8 +339,8 @@ function userPicker(users, selected = [], label = 'Members') {
   updateCount();
   const el = h('div', { class: 'picker' },
     h('div', { class: 'row' }, filter,
-      h('button', { type: 'button', onclick: () => { setAll(true); updateCount(); } }, 'Select all'),
-      h('button', { type: 'button', onclick: () => { setAll(false); updateCount(); } }, 'Deselect all'),
+      h('button', { type: 'button', onclick: () => { setAll(true); updateCount(); } }, withIcon('square-check', 'Select all')),
+      h('button', { type: 'button', onclick: () => { setAll(false); updateCount(); } }, withIcon('square', 'Deselect all')),
       count),
     list,
     h('p', { class: 'muted' }, 'Shift-click to select or deselect a range.'));
@@ -338,7 +356,7 @@ async function renderGroups() {
   }, renderGroups) },
   h('label', {}, 'Group name', h('input', { name: 'name', required: true, autocomplete: 'off' })),
   h('div', { class: 'field' }, h('span', { class: 'muted' }, 'Members (optional)'), newMembers.el),
-  h('div', {}, h('button', { class: 'primary', type: 'submit' }, 'Create group')));
+  h('div', {}, h('button', { class: 'primary', type: 'submit' }, withIcon('users', 'Create group'))));
 
   const editMembers = (g) => {
     const current = g.members.map((m) => m.username);
@@ -352,7 +370,7 @@ async function renderGroups() {
       return add.length || remove.length ? `Members saved (+${add.length} −${remove.length})` : 'No changes';
     }, renderGroups) },
     picker.el,
-    h('div', {}, h('button', { class: 'primary', type: 'submit' }, 'Save members')));
+    h('div', {}, h('button', { class: 'primary', type: 'submit' }, withIcon('floppy-disk', 'Save members'))));
     return h('details', { class: 'edit-members' }, h('summary', {}, 'Edit members'), form);
   };
 
@@ -365,21 +383,21 @@ async function renderGroups() {
           g.members.map((m) => h('span', { class: 'badge' }, m.username, ' ', h('button', { class: 'danger', 'aria-label': `Remove ${m.username} from ${g.name}`, onclick: action(async () => {
             await api('DELETE', `/groups/${g.id}/members/${encodeURIComponent(m.username)}`);
             return `${m.username} removed`;
-          }, renderGroups) }, '×'))),
+          }, renderGroups) }, icon('xmark')))),
           editMembers(g)),
         h('td', {}, fmtDate(g.createdAt)),
         h('td', { class: 'actions' },
-          h('button', { onclick: action(async () => {
+          iconButton('pen', 'Rename', { onclick: action(async () => {
             const name = window.prompt(`New name for ${g.name}`, g.name);
             if (!name) return null;
             await api('PATCH', `/groups/${g.id}`, { name });
             return 'Group renamed';
-          }, renderGroups) }, 'Rename'), ' ',
-          h('button', { class: 'danger', onclick: action(async () => {
+          }, renderGroups) }), ' ',
+          iconButton('trash', 'Delete', { class: 'danger', onclick: action(async () => {
             if (!window.confirm(`Delete group ${g.name}? Its members lose the vault access they had through it.`)) return null;
             await api('DELETE', `/groups/${g.id}`);
             return 'Group deleted';
-          }, renderGroups) }, 'Delete')),
+          }, renderGroups) })),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'New group'), create),
   );
@@ -394,17 +412,17 @@ async function renderAccount() {
   }, renderAccount) },
   h('label', {}, 'Current password', h('input', { name: 'current', type: 'password', required: true, autocomplete: 'current-password' })),
   h('label', {}, 'New password (min. 10)', h('input', { name: 'next', type: 'password', required: true, minlength: 10, autocomplete: 'new-password' })),
-  h('button', { type: 'submit', class: 'primary' }, 'Change password'));
+  h('button', { type: 'submit', class: 'primary' }, withIcon('key', 'Change password')));
 
   main.replaceChildren(
     h('section', { class: 'card' }, h('h2', {}, `Signed-in devices of ${state.me.username}`),
       table(['Device', 'Last used', 'Expires', ''], tokens.map((t) => h('tr', {},
         h('td', {}, t.deviceName, t.current ? [' ', h('span', { class: 'badge' }, 'this browser')] : null),
         h('td', {}, fmtDate(t.lastUsedAt)), h('td', {}, fmtDate(t.expiresAt)),
-        h('td', { class: 'actions' }, t.current ? null : h('button', { class: 'danger', onclick: action(async () => {
+        h('td', { class: 'actions' }, t.current ? null : iconButton('right-from-bracket', 'Sign out', { class: 'danger', onclick: action(async () => {
           await api('DELETE', `/me/tokens/${t.id}`);
           return 'Device signed out';
-        }, renderAccount) }, 'Sign out')),
+        }, renderAccount) })),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'Password'), pw),
   );

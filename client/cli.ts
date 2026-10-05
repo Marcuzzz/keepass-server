@@ -25,6 +25,8 @@ const USAGE = `kps - reference client for keepass-server
   kps duplicate <vault-id> [<name>] [--with-sharing]
                                              Copy a vault (current database, same master password);
                                              --with-sharing also copies members and groups (owner)
+  kps delete <vault-id> [--yes]              Delete a vault and its history on the server (owner);
+                                             asks for the vault name unless --yes
   kps groups                                 List your groups (administrators: all groups)
   kps share <vault-id> <group> <role>        Give a group access to a vault (owner)
   kps unshare <vault-id> <group>             Remove a group's access to a vault (owner)
@@ -193,6 +195,24 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     if (!vaultId) throw new Error(USAGE);
     const info = await (await api()).duplicateVault(vaultId, name.join(' ') || undefined, values['with-sharing'] === true);
     out(`Vault "${info.name}" created, id: ${info.id}`);
+  },
+
+  async delete(args) {
+    const { values, positionals } = parseArgs({ args, options: { yes: { type: 'boolean' } }, allowPositionals: true });
+    const [vaultId] = positionals;
+    if (!vaultId) throw new Error(USAGE);
+    const client = await api();
+    const info = await client.getVault(vaultId);
+    if (!values.yes) {
+      const typed = await ask(`Delete "${info.name}" with all ${info.revision} revision(s) on the server? Type the vault name to confirm: `);
+      if (typed.trim() !== info.name) throw new Error('Name did not match; nothing was deleted');
+    }
+    await client.deleteVault(vaultId);
+    out(`Vault "${info.name}" deleted`);
+    // Keep a local cache that holds changes the server never got; the user can still export them.
+    const local = (await localVaults()).find((v) => v.state.vaultId === vaultId);
+    if (local?.state.dirty) out(`The local copy has unsynced changes and was kept: kps export ${vaultId} <file.kdbx>`);
+    else await fs.rm(vaultDir(vaultId), { recursive: true, force: true });
   },
 
   async groups() {

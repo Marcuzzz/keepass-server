@@ -52,6 +52,7 @@ const schemas: Record<string, Schema> = {
   Vault: obj({
     id: str, name: str, role: ref('Role'), revision: int, sha256: nullable(str), size: nullable(int),
     createdAt: date, updatedAt: nullable(date), conflicts: { ...int, description: 'Number of unresolved conflict copies' },
+    protected: { ...bool, description: 'Deletion protection: DELETE fails until it is turned off' },
   }),
   CommitResult: obj({ revision: int, sha256: str, unchanged: { ...bool, description: 'Upload was identical to the current revision' } }),
   Revision: obj({
@@ -157,8 +158,15 @@ const paths: Record<string, Record<string, Schema>> = {
   },
   '/vaults/{id}': {
     get: { tags: ['Vaults'], summary: 'Vault info', parameters: [P.vault], responses: { 200: ok('Vault', ref('Vault')), ...NO_VAULT } },
-    patch: { tags: ['Vaults'], summary: 'Rename (owner)', parameters: [P.vault], requestBody: body(obj({ name: str })), responses: { 200: ok('Vault', ref('Vault')), ...VAULT_ROLE('owner') } },
-    delete: { tags: ['Vaults'], summary: 'Delete (owner)', parameters: [P.vault], responses: { ...OK, ...VAULT_ROLE('owner') } },
+    patch: {
+      tags: ['Vaults'], summary: 'Rename and/or set deletion protection (owner)', parameters: [P.vault],
+      requestBody: body(obj({ name: str, protected: bool }, [])),
+      responses: { 200: ok('Vault', ref('Vault')), 400: err('Neither name nor protected given'), ...VAULT_ROLE('owner') },
+    },
+    delete: {
+      tags: ['Vaults'], summary: 'Delete with all revisions and conflict copies (owner)', parameters: [P.vault],
+      responses: { ...OK, ...VAULT_ROLE('owner'), 409: err('Vault is protected from deletion (`vault_protected`)') },
+    },
   },
   '/vaults/{id}/duplicate': {
     post: {

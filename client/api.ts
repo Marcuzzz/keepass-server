@@ -27,6 +27,8 @@ export interface VaultInfo {
   size: number | null;
   updatedAt: string | null;
   conflicts: number;
+  /** Deletion protection is on. */
+  protected: boolean;
 }
 
 export interface GroupInfo {
@@ -144,7 +146,12 @@ export class KpsApi {
     return this.json<VaultInfo>('PATCH', `/api/v1/vaults/${encodeURIComponent(id)}`, { name });
   }
 
-  /** Owner: deletes a vault with all its revisions and conflict copies. */
+  /** Owner: turns deletion protection on or off. */
+  setVaultProtected(id: string, value: boolean) {
+    return this.json<VaultInfo>('PATCH', `/api/v1/vaults/${encodeURIComponent(id)}`, { protected: value });
+  }
+
+  /** Owner: deletes a vault with all its revisions and conflict copies (fails with 409 while protected). */
   async deleteVault(id: string): Promise<void> {
     await this.json('DELETE', `/api/v1/vaults/${encodeURIComponent(id)}`);
   }

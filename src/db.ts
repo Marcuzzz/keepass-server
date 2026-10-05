@@ -90,6 +90,9 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_group_members_user ON group_members(user_id);
   CREATE INDEX idx_vault_groups_group ON vault_groups(group_id);
   `,
+  `
+  ALTER TABLE vaults ADD COLUMN protected INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export type Db = DatabaseSync;

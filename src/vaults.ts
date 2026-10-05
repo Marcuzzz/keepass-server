@@ -24,6 +24,8 @@ export interface VaultRow {
   name: string;
   created_at: number;
   current_rev: number;
+  /** 1 = deletion protection is on. */
+  protected: number;
 }
 
 export interface RevisionRow {
@@ -70,7 +72,7 @@ export class VaultService {
 
   /** Returns the vault and caller's role, or 404 so callers can't probe for other vaults. */
   access(vaultId: string, user: AuthUser, minRole: Role = 'reader'): { vault: VaultRow; role: Role } {
-    const vault = this.db.prepare('SELECT id, name, created_at, current_rev FROM vaults WHERE id = ?').get(vaultId) as
+    const vault = this.db.prepare('SELECT id, name, created_at, current_rev, protected FROM vaults WHERE id = ?').get(vaultId) as
       | VaultRow
       | undefined;
     // Administrators are owners of every vault, also where a membership or group gives them a lower role.
@@ -95,7 +97,7 @@ export class VaultService {
         SELECT vault_id, MAX(CASE role WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 ELSE 1 END) AS rank
         FROM (${USER_ROLES_SQL}) GROUP BY vault_id
       )
-      SELECT v.id, v.name, v.created_at, v.current_rev, b.rank, r.sha256, r.size, r.created_at AS updated_at
+      SELECT v.id, v.name, v.created_at, v.current_rev, v.protected, b.rank, r.sha256, r.size, r.created_at AS updated_at
       FROM vaults v
       LEFT JOIN best b ON b.vault_id = v.id
       LEFT JOIN revisions r ON r.vault_id = v.id AND r.rev = v.current_rev
@@ -118,6 +120,7 @@ export class VaultService {
       createdAt: new Date(vault.created_at).toISOString(),
       updatedAt: head?.updated_at ? new Date(head.updated_at).toISOString() : null,
       conflicts,
+      protected: vault.protected === 1,
     };
   }
 
@@ -128,7 +131,7 @@ export class VaultService {
   }
 
   create(user: AuthUser, name: string, groups: Array<{ groupId: number; role: Role }> = []): VaultRow {
-    const vault: VaultRow = { id: crypto.randomUUID(), name, created_at: now(), current_rev: 0 };
+    const vault: VaultRow = { id: crypto.randomUUID(), name, created_at: now(), current_rev: 0, protected: 0 };
     transaction(this.db, () => {
       this.db.prepare('INSERT INTO vaults (id, name, created_by, created_at, current_rev) VALUES (?, ?, ?, ?, 0)').run(
         vault.id, name, user.id, vault.created_at,
@@ -146,7 +149,7 @@ export class VaultService {
    * `copySharing` also copies its members and group roles.
    */
   duplicate(sourceId: string, user: AuthUser, name: string, copySharing: boolean): VaultRow {
-    const vault: VaultRow = { id: crypto.randomUUID(), name, created_at: now(), current_rev: 0 };
+    const vault: VaultRow = { id: crypto.randomUUID(), name, created_at: now(), current_rev: 0, protected: 0 };
     transaction(this.db, () => {
       const source = this.db.prepare('SELECT name, current_rev FROM vaults WHERE id = ?').get(sourceId) as { name: string; current_rev: number } | undefined;
       if (!source) throw new HttpError(404, 'vault_not_found', 'Vault not found');
@@ -177,7 +180,13 @@ export class VaultService {
     this.db.prepare('UPDATE vaults SET name = ? WHERE id = ?').run(name, vaultId);
   }
 
+  setProtected(vaultId: string, value: boolean): void {
+    this.db.prepare('UPDATE vaults SET protected = ? WHERE id = ?').run(value ? 1 : 0, vaultId);
+  }
+
   async remove(vaultId: string): Promise<void> {
+    const row = this.db.prepare('SELECT protected FROM vaults WHERE id = ?').get(vaultId) as { protected: number } | undefined;
+    if (row?.protected) throw new HttpError(409, 'vault_protected', 'Vault is protected from deletion; turn protection off first');
     const shas = this.blobRefs(vaultId);
     this.db.prepare('DELETE FROM vaults WHERE id = ?').run(vaultId);
     await this.collect(shas);

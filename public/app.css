@@ -71,3 +71,7 @@ details.edit-members[open] { margin-top: 4px; min-width: 320px; }
 button.icon { padding: 5px 8px; min-width: 32px; line-height: 1.2; }
 button .fa-solid { font-size: 13px; }
 td.actions button.icon + button.icon { margin-left: 2px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--line); }
+button.icon.active { color: var(--accent); border-color: var(--accent); }
+h2 .badge { font-weight: normal; vertical-align: middle; }

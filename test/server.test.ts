@@ -353,6 +353,30 @@ describe('rename and duplicate', () => {
     await assert.rejects(admin.getVault(vault.id), (err: ApiError) => err.status === 404);
   });
 
+  it('Should_RefuseDelete_When_VaultProtected', async () => {
+    const owner = await createUser(server.url, admin.token!, 'protect-owner');
+    const vault = await owner.createVault('protect-me');
+    assert.equal(vault.protected, false);
+    assert.equal((await owner.setVaultProtected(vault.id, true)).protected, true);
+    assert.equal((await owner.listVaults()).find((v) => v.id === vault.id)?.protected, true);
+    await assert.rejects(owner.deleteVault(vault.id), (err: ApiError) => err.status === 409 && err.code === 'vault_protected');
+    await assert.rejects(admin.deleteVault(vault.id), (err: ApiError) => err.status === 409);
+
+    // Only owners (and administrators) can change protection; renaming keeps it.
+    const editor = await createUser(server.url, admin.token!, 'protect-editor');
+    await call(server.url, owner.token, 'PUT', `/api/v1/vaults/${vault.id}/members/protect-editor`, { role: 'editor' });
+    await assert.rejects(editor.setVaultProtected(vault.id, false), (err: ApiError) => err.status === 403);
+    assert.equal((await owner.renameVault(vault.id, 'protect-renamed')).protected, true);
+    assert.equal((await call(server.url, owner.token, 'PATCH', `/api/v1/vaults/${vault.id}`, { protected: 'no' })).status, 400);
+    assert.equal((await call(server.url, owner.token, 'PATCH', `/api/v1/vaults/${vault.id}`, {})).status, 400);
+
+    // A copy starts unprotected.
+    assert.equal((await owner.duplicateVault(vault.id)).protected, false);
+
+    await admin.setVaultProtected(vault.id, false);
+    await owner.deleteVault(vault.id);
+  });
+
   it('Should_TreatAdminAsOwner_When_GroupGivesLowerRole', async () => {
     const owner = await createUser(server.url, admin.token!, 'admin-role-owner');
     const vault = await owner.createVault('admin-role-vault');

@@ -117,6 +117,14 @@ async function deleteVault(vault) {
   return `Vault "${vault.name}" deleted`;
 }
 
+/** Turns deletion protection on or off; returns the toast message. */
+async function setProtected(vault, value) {
+  await api('PATCH', `/vaults/${vault.id}`, { protected: value });
+  return value ? `"${vault.name}" is protected from deletion` : `Deletion protection of "${vault.name}" turned off`;
+}
+
+const protectedBadge = () => h('span', { class: 'badge', title: 'Protected from deletion' }, icon('lock'), ' protected');
+
 /** Copies a vault (current database only) and opens the copy. */
 async function duplicateVault(vault, name, copySharing) {
   const copy = await api('POST', `/vaults/${vault.id}/duplicate`, { name, copySharing });
@@ -145,7 +153,7 @@ async function renderVaults() {
   main.replaceChildren(
     h('section', { class: 'card' }, h('h2', {}, 'Vaults'),
       table(['Name', 'Role', 'Revision', 'Updated', 'Size', ''], vaults.map((v) => h('tr', {},
-        h('td', {}, h('a', { onclick: () => renderVault(v.id) }, v.name), v.conflicts ? [' ', h('span', { class: 'badge warn' }, `${v.conflicts} conflict${v.conflicts > 1 ? 's' : ''}`)] : null),
+        h('td', {}, h('a', { onclick: () => renderVault(v.id) }, v.name), v.protected ? [' ', protectedBadge()] : null, v.conflicts ? [' ', h('span', { class: 'badge warn' }, `${v.conflicts} conflict${v.conflicts > 1 ? 's' : ''}`)] : null),
         h('td', {}, h('span', { class: 'badge' }, v.role)),
         h('td', {}, v.revision || '—'),
         h('td', {}, fmtDate(v.updatedAt)),
@@ -158,7 +166,12 @@ async function renderVaults() {
             if (!name) return null;
             return duplicateVault(v, name, false);
           }) }), ' ',
-          v.role === 'owner' ? iconButton('trash', 'Delete', { class: 'danger', onclick: action(() => deleteVault(v), renderVaults) }) : null),
+          v.role === 'owner' ? iconButton(v.protected ? 'lock' : 'lock-open', v.protected ? 'Turn off deletion protection' : 'Protect from deletion', {
+            class: v.protected ? 'active' : '', 'aria-pressed': String(v.protected), onclick: action(() => setProtected(v, !v.protected), renderVaults),
+          }) : null, ' ',
+          v.role === 'owner' ? iconButton('trash', v.protected ? 'Protected from deletion; turn protection off first' : 'Delete', {
+            class: 'danger', disabled: v.protected, onclick: action(() => deleteVault(v), renderVaults),
+          }) : null),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'New vault'),
       h('p', { class: 'muted' }, 'Upload an existing database, or create an empty vault and let a client (KeePassDX, KeePassXC, kps) upload the first version.'),
@@ -199,7 +212,9 @@ async function renderVault(id) {
   }, rerender) },
   h('input', { name: 'name', value: vault.name, required: true, 'aria-label': 'Vault name' }),
   h('button', { type: 'submit' }, withIcon('pen', 'Rename')),
-  h('button', { type: 'button', class: 'danger', onclick: action(async () => {
+  h('button', { type: 'button', onclick: action(() => setProtected(vault, !vault.protected), rerender) },
+    vault.protected ? withIcon('lock-open', 'Turn off protection') : withIcon('lock', 'Protect from deletion')),
+  h('button', { type: 'button', class: 'danger', disabled: vault.protected, title: vault.protected ? 'Turn off deletion protection first' : undefined, onclick: action(async () => {
     const message = await deleteVault(vault);
     if (message) await renderVaults();
     return message;
@@ -214,9 +229,10 @@ async function renderVault(id) {
   main.replaceChildren(
     h('p', {}, h('a', { onclick: renderVaults }, '← All vaults')),
     h('section', { class: 'card' },
-      h('h2', {}, vault.name),
+      h('h2', {}, vault.name, vault.protected ? [' ', protectedBadge()] : null),
       h('p', { class: 'muted' }, `Vault id ${vault.id} · your role: ${vault.role} · revision ${vault.revision}`),
-      isOwner ? [h('h3', {}, 'Rename or delete'), rename] : null,
+      isOwner ? [h('h3', {}, 'Rename, protect or delete'),
+        h('p', { class: 'muted' }, 'A protected vault cannot be deleted until an owner or administrator turns protection off.'), rename] : null,
       h('h3', {}, 'Duplicate'),
       h('p', { class: 'muted' }, 'Creates a new vault you own with the current database (same master password). Revision history and conflict copies stay here.'),
       duplicate),

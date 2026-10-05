@@ -378,7 +378,16 @@ export function buildApi(db: Db, config: Config, vaults: VaultService): { router
 
   router.add('PATCH', '/api/v1/vaults/:id', async (ctx) => {
     const { vault } = vaults.access(ctx.params.id!, requireUser(ctx), 'owner');
-    vaults.rename(vault.id, requireString(await readJson(ctx.req), 'name', 200));
+    const body = await readJson(ctx.req);
+    if (body.name === undefined && body.protected === undefined) {
+      throw new HttpError(400, 'invalid_request', 'Send "name" and/or "protected"');
+    }
+    if (body.protected !== undefined && typeof body.protected !== 'boolean') {
+      throw new HttpError(400, 'invalid_request', 'Field "protected" must be a boolean');
+    }
+    const name = body.name === undefined ? undefined : requireString(body, 'name', 200);
+    if (name !== undefined) vaults.rename(vault.id, name);
+    if (typeof body.protected === 'boolean') vaults.setProtected(vault.id, body.protected);
     const updated = vaults.access(vault.id, requireUser(ctx));
     sendJson(ctx.res, 200, vaults.describe(updated.vault, updated.role));
   });

@@ -36,7 +36,7 @@ The reference implementation is `KpsApi.testConnection` in `client/api.ts`.
 | PUT / DELETE | `/groups/:id/members/:username` | Admin: add / remove a group member |
 | GET | `/vaults` | Vaults visible to the caller, with `revision`, `role`, `conflicts` |
 | POST | `/vaults` | `{ name, groups?: [{ name, role }] }` → new empty vault (revision 0), caller is owner, optionally shared with groups |
-| GET / PATCH / DELETE | `/vaults/:id` | Info / rename `{ name }` (owner) / delete (owner) |
+| GET / PATCH / DELETE | `/vaults/:id` | Info / `{ name?, protected? }` rename or set deletion protection (owner) / delete (owner; `409 vault_protected` while protected) |
 | POST | `/vaults/:id/duplicate` | `{ name?, copySharing? }` → copy with the current database as revision 1 (same master password), caller is owner. No history or conflict copies; `copySharing` (owner only) copies members and group roles |
 | GET, HEAD | `/vaults/:id/content` | Current database. `ETag: "<rev>"`, `X-KPS-Revision`, `X-KPS-SHA256`. `If-None-Match: "<rev>"` → `304`. Empty vault → `404 empty_vault` |
 | PUT | `/vaults/:id/content` | Upload. **Requires** `If-Match: "<base rev>"` (`"0"` for the first upload, `*` = force). Optional `X-KPS-SHA256`, `X-KPS-Note` (URL-encoded). `201` new revision, `200` unchanged, `412` conflict, `422` not a KDBX file |

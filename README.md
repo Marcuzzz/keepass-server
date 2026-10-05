@@ -77,6 +77,7 @@ npm run kps -- create Family --group family:editor     # share with a group righ
 npm run kps -- share <vault-id> work reader             # or later; kps unshare <vault-id> work
 npm run kps -- rename <vault-id> "Family 2026"
 npm run kps -- duplicate <vault-id> "Client Y" --with-sharing   # copy with the same members and groups
+npm run kps -- protect <vault-id> on                     # deletion protection; delete fails until "off"
 npm run kps -- delete <vault-id>                         # asks for the vault name; --yes to skip
 npm run kps -- groups
 npm run kps -- vaults

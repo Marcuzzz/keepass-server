@@ -25,6 +25,7 @@ const USAGE = `kps - reference client for keepass-server
   kps duplicate <vault-id> [<name>] [--with-sharing]
                                              Copy a vault (current database, same master password);
                                              --with-sharing also copies members and groups (owner)
+  kps protect <vault-id> on|off              Turn deletion protection on or off (owner)
   kps delete <vault-id> [--yes]              Delete a vault and its history on the server (owner);
                                              asks for the vault name unless --yes
   kps groups                                 List your groups (administrators: all groups)
@@ -151,7 +152,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
       const l = local.get(v.id);
       const state = l ? ` local r${l.state.baseRevision}${l.state.dirty ? ' (unsynced changes)' : ''}${l.state.workOffline ? ' [offline]' : ''}` : '';
       const conflicts = v.conflicts ? `, ${v.conflicts} conflict cop${v.conflicts === 1 ? 'y' : 'ies'}` : '';
-      out(`${v.id}  ${v.name}  [${v.role}] r${v.revision}${conflicts}${state}`);
+      out(`${v.id}  ${v.name}  [${v.role}] r${v.revision}${v.protected ? ' (protected)' : ''}${conflicts}${state}`);
     }
   },
 
@@ -197,12 +198,20 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     out(`Vault "${info.name}" created, id: ${info.id}`);
   },
 
+  async protect(args) {
+    const [vaultId, mode] = args;
+    if (!vaultId || (mode !== 'on' && mode !== 'off')) throw new Error(USAGE);
+    const info = await (await api()).setVaultProtected(vaultId, mode === 'on');
+    out(`"${info.name}" is ${info.protected ? 'protected from deletion' : 'no longer protected from deletion'}`);
+  },
+
   async delete(args) {
     const { values, positionals } = parseArgs({ args, options: { yes: { type: 'boolean' } }, allowPositionals: true });
     const [vaultId] = positionals;
     if (!vaultId) throw new Error(USAGE);
     const client = await api();
     const info = await client.getVault(vaultId);
+    if (info.protected) throw new Error(`"${info.name}" is protected from deletion; run: kps protect ${vaultId} off`);
     if (!values.yes) {
       const typed = await ask(`Delete "${info.name}" with all ${info.revision} revision(s) on the server? Type the vault name to confirm: `);
       if (typed.trim() !== info.name) throw new Error('Name did not match; nothing was deleted');

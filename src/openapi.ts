@@ -160,6 +160,15 @@ const paths: Record<string, Record<string, Schema>> = {
     patch: { tags: ['Vaults'], summary: 'Rename (owner)', parameters: [P.vault], requestBody: body(obj({ name: str })), responses: { 200: ok('Vault', ref('Vault')), ...VAULT_ROLE('owner') } },
     delete: { tags: ['Vaults'], summary: 'Delete (owner)', parameters: [P.vault], responses: { ...OK, ...VAULT_ROLE('owner') } },
   },
+  '/vaults/{id}/duplicate': {
+    post: {
+      tags: ['Vaults'], summary: 'Copy a vault; the caller becomes owner of the copy', parameters: [P.vault],
+      description: 'The copy starts at revision 1 with the current database (same master password); history and conflict copies are not copied. '
+        + '`copySharing` (owners only) also copies members and group roles.',
+      requestBody: { ...body(obj({ name: { ...str, description: 'Default: "<name> (copy)"' }, copySharing: { ...bool, default: false } }, [])), required: false },
+      responses: { 201: ok('Created', ref('Vault')), ...NO_VAULT, 403: err('copySharing needs the owner role') },
+    },
+  },
   '/vaults/{id}/content': {
     get: {
       tags: ['Content'], summary: 'Download the current database',

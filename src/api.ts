@@ -383,6 +383,18 @@ export function buildApi(db: Db, config: Config, vaults: VaultService): { router
     sendJson(ctx.res, 200, vaults.describe(updated.vault, updated.role));
   });
 
+  router.add('POST', '/api/v1/vaults/:id/duplicate', async (ctx) => {
+    const user = requireUser(ctx);
+    const { vault, role } = vaults.access(ctx.params.id!, user);
+    const body = await readJson(ctx.req);
+    const name = body.name === undefined ? `${vault.name} (copy)`.slice(0, 200) : requireString(body, 'name', 200);
+    // Anyone who can download the vault may copy it; copying who has access is for owners.
+    const copySharing = body.copySharing === true;
+    if (copySharing && role !== 'owner') throw new HttpError(403, 'forbidden', 'Only owners can copy members and groups');
+    const copy = vaults.duplicate(vault.id, user, name, copySharing);
+    sendJson(ctx.res, 201, vaults.describe(copy, 'owner'));
+  });
+
   router.add('DELETE', '/api/v1/vaults/:id', async (ctx) => {
     const { vault } = vaults.access(ctx.params.id!, requireUser(ctx), 'owner');
     await vaults.remove(vault.id);

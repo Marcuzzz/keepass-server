@@ -142,6 +142,39 @@ export class VaultService {
     return vault;
   }
 
+  /**
+   * New vault owned by `user` whose revision 1 is the source's current database (an empty source gives an
+   * empty copy). The blob is shared, not copied. History and conflict copies stay with the source;
+   * `copySharing` also copies its members and group roles.
+   */
+  duplicate(sourceId: string, user: AuthUser, name: string, copySharing: boolean): VaultRow {
+    const vault: VaultRow = { id: crypto.randomUUID(), name, created_at: now(), current_rev: 0 };
+    transaction(this.db, () => {
+      const source = this.db.prepare('SELECT name, current_rev FROM vaults WHERE id = ?').get(sourceId) as { name: string; current_rev: number } | undefined;
+      if (!source) throw new HttpError(404, 'vault_not_found', 'Vault not found');
+      const head = this.currentRevision(sourceId, source.current_rev);
+      vault.current_rev = head ? 1 : 0;
+      this.db.prepare('INSERT INTO vaults (id, name, created_by, created_at, current_rev) VALUES (?, ?, ?, ?, ?)').run(
+        vault.id, name, user.id, vault.created_at, vault.current_rev,
+      );
+      this.db.prepare("INSERT INTO vault_members (vault_id, user_id, role) VALUES (?, ?, 'owner')").run(vault.id, user.id);
+      if (copySharing) {
+        this.db.prepare('INSERT OR IGNORE INTO vault_members (vault_id, user_id, role) SELECT ?, user_id, role FROM vault_members WHERE vault_id = ?')
+          .run(vault.id, sourceId);
+        this.db.prepare('INSERT INTO vault_groups (vault_id, group_id, role) SELECT ?, group_id, role FROM vault_groups WHERE vault_id = ?')
+          .run(vault.id, sourceId);
+      }
+      if (head) {
+        this.db.prepare(`
+          INSERT INTO revisions (vault_id, rev, sha256, size, created_at, user_id, device_name, base_rev, note)
+          VALUES (?, 1, ?, ?, ?, ?, ?, NULL, ?)
+        `).run(vault.id, head.sha256, head.size, vault.created_at, user.id, user.deviceName,
+          `Copy of "${source.name}" revision ${source.current_rev}`.slice(0, 500));
+      }
+    });
+    return vault;
+  }
+
   rename(vaultId: string, name: string): void {
     this.db.prepare('UPDATE vaults SET name = ? WHERE id = ?').run(name, vaultId);
   }

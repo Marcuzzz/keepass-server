@@ -334,6 +334,71 @@ describe('groups', () => {
   });
 });
 
+describe('rename and duplicate', () => {
+  it('Should_RenameVault_When_Owner', async () => {
+    const vault = await admin.createVault('rename-me');
+    assert.equal((await admin.renameVault(vault.id, 'renamed')).name, 'renamed');
+    const reader = await createUser(server.url, admin.token!, 'rename-reader');
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/members/rename-reader`, { role: 'reader' });
+    await assert.rejects(reader.renameVault(vault.id, 'nope'), (err: ApiError) => err.status === 403);
+  });
+
+  it('Should_CopyCurrentDatabaseOnly_When_Duplicating', async () => {
+    const source = await admin.createVault('dup-source');
+    await admin.upload(source.id, kdbxA, 0);
+    await admin.upload(source.id, kdbxB, 1);
+    const copy = await admin.duplicateVault(source.id, 'dup-copy');
+    assert.equal(copy.name, 'dup-copy');
+    assert.equal(copy.role, 'owner');
+    assert.equal(copy.revision, 1);
+    assert.deepEqual((await admin.download(copy.id))!.data, kdbxB);
+    const revisions = (await (await call(server.url, admin.token, 'GET', `/api/v1/vaults/${copy.id}/revisions`)).json()) as Array<{ note: string }>;
+    assert.equal(revisions.length, 1);
+    assert.match(revisions[0]!.note, /Copy of "dup-source" revision 2/);
+
+    // The vaults are independent, and deleting the source keeps the copy's (shared) blob.
+    await admin.upload(copy.id, kdbxA, 1);
+    assert.equal((await admin.getVault(source.id)).revision, 2);
+    assert.equal((await call(server.url, admin.token, 'DELETE', `/api/v1/vaults/${source.id}`)).status, 200);
+    assert.deepEqual((await admin.download(copy.id))!.data, kdbxA);
+    const rev1 = await call(server.url, admin.token, 'GET', `/api/v1/vaults/${copy.id}/revisions/1/content`);
+    assert.deepEqual(new Uint8Array(await rev1.arrayBuffer()), kdbxB);
+  });
+
+  it('Should_DefaultNameAndStayEmpty_When_DuplicatingEmptyVault', async () => {
+    const source = await admin.createVault('empty-source');
+    const copy = await admin.duplicateVault(source.id);
+    assert.equal(copy.name, 'empty-source (copy)');
+    assert.equal(copy.revision, 0);
+    await admin.upload(copy.id, kdbxA, 0);
+  });
+
+  it('Should_CopySharing_When_OwnerAsksForIt', async () => {
+    const source = await admin.createVault('dup-shared');
+    await admin.upload(source.id, kdbxA, 0);
+    const reader = await createUser(server.url, admin.token!, 'dup-reader');
+    await admin.createGroup('dup-group', []);
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${source.id}/members/dup-reader`, { role: 'reader' });
+    await admin.shareWithGroup(source.id, 'dup-group', 'editor');
+
+    const plain = await admin.duplicateVault(source.id, 'dup-plain');
+    assert.deepEqual((await admin.vaultGroups(plain.id)).map((g) => g.name), []);
+
+    const shared = await admin.duplicateVault(source.id, 'dup-with-sharing', true);
+    assert.deepEqual((await admin.vaultGroups(shared.id)).map((g) => `${g.name}:${g.role}`), ['dup-group:editor']);
+    const members = (await (await call(server.url, admin.token, 'GET', `/api/v1/vaults/${shared.id}/members`)).json()) as Array<{ username: string; role: string }>;
+    assert.deepEqual(members.map((m) => `${m.username}:${m.role}`).sort(), ['admin:owner', 'dup-reader:reader']);
+
+    // A reader can make a private copy, but not copy who has access.
+    await assert.rejects(reader.duplicateVault(source.id, 'x', true), (err: ApiError) => err.status === 403);
+    const own = await reader.duplicateVault(source.id, 'reader copy');
+    assert.equal(own.role, 'owner');
+    assert.deepEqual((await reader.download(own.id))!.data, kdbxA);
+    const stranger = await createUser(server.url, admin.token!, 'dup-stranger');
+    await assert.rejects(stranger.duplicateVault(source.id), (err: ApiError) => err.status === 404);
+  });
+});
+
 describe('API documentation', () => {
   it('Should_DescribeEveryRoute_When_ServingOpenApiSpec', async () => {
     const res = await call(server.url, undefined, 'GET', '/api/openapi.json');

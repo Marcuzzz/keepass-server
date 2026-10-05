@@ -139,6 +139,16 @@ export class KpsApi {
     return this.json<VaultInfo>('POST', '/api/v1/vaults', groups?.length ? { name, groups } : { name });
   }
 
+  /** Owner: renames a vault. */
+  renameVault(id: string, name: string) {
+    return this.json<VaultInfo>('PATCH', `/api/v1/vaults/${encodeURIComponent(id)}`, { name });
+  }
+
+  /** Copies a vault (current database only); the caller owns the copy. `copySharing` needs the owner role. */
+  duplicateVault(id: string, name?: string, copySharing = false) {
+    return this.json<VaultInfo>('POST', `/api/v1/vaults/${encodeURIComponent(id)}/duplicate`, { ...(name ? { name } : {}), copySharing });
+  }
+
   // --- groups (create/rename/delete/members are administrator only) ---------------------------
 
   listGroups() {

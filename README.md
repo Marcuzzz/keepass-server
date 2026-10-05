@@ -75,6 +75,8 @@ npm run kps -- login https://vault.example.com alice
 npm run kps -- create Family --from ~/Family.kdbx        # or without --from: new empty database
 npm run kps -- create Family --group family:editor     # share with a group right away
 npm run kps -- share <vault-id> work reader             # or later; kps unshare <vault-id> work
+npm run kps -- rename <vault-id> "Family 2026"
+npm run kps -- duplicate <vault-id> "Client Y" --with-sharing   # copy with the same members and groups
 npm run kps -- groups
 npm run kps -- vaults
 npm run kps -- clone <vault-id>

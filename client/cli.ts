@@ -21,6 +21,10 @@ const USAGE = `kps - reference client for keepass-server
   kps create <name> [--from <file.kdbx>] [--group <group>:<role> ...]
                                              Create a vault: upload a file, or start a new database;
                                              --group shares it with a group (role: owner|editor|reader)
+  kps rename <vault-id> <new name>           Rename a vault (owner)
+  kps duplicate <vault-id> [<name>] [--with-sharing]
+                                             Copy a vault (current database, same master password);
+                                             --with-sharing also copies members and groups (owner)
   kps groups                                 List your groups (administrators: all groups)
   kps share <vault-id> <group> <role>        Give a group access to a vault (owner)
   kps unshare <vault-id> <group>             Remove a group's access to a vault (owner)
@@ -174,6 +178,21 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     await vault.save(db);
     await syncOne(client, vault, creds);
     out(`Vault id: ${info.id}`);
+  },
+
+  async rename(args) {
+    const [vaultId, ...name] = args;
+    if (!vaultId || !name.length) throw new Error(USAGE);
+    const info = await (await api()).renameVault(vaultId, name.join(' '));
+    out(`Renamed to "${info.name}"`);
+  },
+
+  async duplicate(args) {
+    const { values, positionals } = parseArgs({ args, options: { 'with-sharing': { type: 'boolean' } }, allowPositionals: true });
+    const [vaultId, ...name] = positionals;
+    if (!vaultId) throw new Error(USAGE);
+    const info = await (await api()).duplicateVault(vaultId, name.join(' ') || undefined, values['with-sharing'] === true);
+    out(`Vault "${info.name}" created, id: ${info.id}`);
   },
 
   async groups() {

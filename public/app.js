@@ -92,6 +92,21 @@ function renderLogin() {
   main.replaceChildren(form);
 }
 
+/** Asks for a new name and renames the vault; returns the toast message, or null when cancelled. */
+async function renameVault(vault) {
+  const name = window.prompt(`New name for "${vault.name}"`, vault.name)?.trim();
+  if (!name || name === vault.name) return null;
+  await api('PATCH', `/vaults/${vault.id}`, { name });
+  return `Renamed to "${name}"`;
+}
+
+/** Copies a vault (current database only) and opens the copy. */
+async function duplicateVault(vault, name, copySharing) {
+  const copy = await api('POST', `/vaults/${vault.id}/duplicate`, { name, copySharing });
+  await renderVault(copy.id);
+  return `Vault "${copy.name}" created`;
+}
+
 async function renderVaults() {
   const [vaults, groups] = await Promise.all([api('GET', '/vaults'), api('GET', '/groups')]);
   const create = h('form', { class: 'row', onsubmit: action(async () => {
@@ -118,7 +133,14 @@ async function renderVaults() {
         h('td', {}, v.revision || '—'),
         h('td', {}, fmtDate(v.updatedAt)),
         h('td', {}, fmtSize(v.size)),
-        h('td', { class: 'actions' }, v.revision ? h('button', { onclick: action(() => download(`/vaults/${v.id}/content`, `${v.name}.kdbx`)) }, 'Download') : null),
+        h('td', { class: 'actions' },
+          v.revision ? h('button', { onclick: action(() => download(`/vaults/${v.id}/content`, `${v.name}.kdbx`)) }, 'Download') : null, ' ',
+          v.role === 'owner' ? h('button', { onclick: action(() => renameVault(v), renderVaults) }, 'Rename') : null, ' ',
+          h('button', { title: 'Copy this vault (current database, same master password)', onclick: action(async () => {
+            const name = window.prompt(`Name for the copy of "${v.name}"`, `${v.name} (copy)`)?.trim();
+            if (!name) return null;
+            return duplicateVault(v, name, false);
+          }) }, 'Duplicate')),
       )))),
     h('section', { class: 'card' }, h('h2', {}, 'New vault'),
       h('p', { class: 'muted' }, 'Upload an existing database, or create an empty vault and let a client (KeePassDX, KeePassXC, kps) upload the first version.'),
@@ -165,12 +187,21 @@ async function renderVault(id) {
     return 'Vault deleted';
   }, renderVaults) }, 'Delete vault'));
 
+  const duplicate = h('form', { class: 'row', onsubmit: action(() => duplicateVault(vault, field(duplicate, 'name'),
+    isOwner && duplicate.elements.namedItem('copySharing').checked)) },
+  h('input', { name: 'name', value: `${vault.name} (copy)`, required: true, maxlength: 200, 'aria-label': 'Name of the copy' }),
+  isOwner ? h('label', { class: 'row' }, h('input', { name: 'copySharing', type: 'checkbox' }), 'Also copy members and groups') : null,
+  h('button', { type: 'submit' }, 'Duplicate'));
+
   main.replaceChildren(
     h('p', {}, h('a', { onclick: renderVaults }, '← All vaults')),
     h('section', { class: 'card' },
       h('h2', {}, vault.name),
       h('p', { class: 'muted' }, `Vault id ${vault.id} · your role: ${vault.role} · revision ${vault.revision}`),
-      isOwner ? rename : null),
+      isOwner ? [h('h3', {}, 'Rename or delete'), rename] : null,
+      h('h3', {}, 'Duplicate'),
+      h('p', { class: 'muted' }, 'Creates a new vault you own with the current database (same master password). Revision history and conflict copies stay here.'),
+      duplicate),
     h('section', { class: 'card' }, h('h2', {}, `Conflict copies (${conflicts.length})`),
       h('p', { class: 'muted' }, 'Saved when a device could not merge its changes (e.g. the master key was changed elsewhere). Download one, open it next to the current database, use KeePass "Merge/Synchronize", then delete the copy.'),
       table(['Created', 'By', 'Base rev', 'Reason', ''], conflicts.map((c) => h('tr', {},

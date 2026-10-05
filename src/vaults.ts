@@ -9,6 +9,14 @@ import { BlobStore } from './storage.ts';
 
 export type Role = 'owner' | 'editor' | 'reader';
 const ROLE_RANK: Record<Role, number> = { reader: 1, editor: 2, owner: 3 };
+const RANK_ROLE: Record<number, Role> = { 1: 'reader', 2: 'editor', 3: 'owner' };
+
+/** Every (vault_id, role) the user gets directly or through a group; bind the user id twice. */
+const USER_ROLES_SQL = `
+  SELECT vault_id, role FROM vault_members WHERE user_id = ?
+  UNION ALL
+  SELECT vg.vault_id, vg.role FROM vault_groups vg JOIN group_members gm ON gm.group_id = vg.group_id WHERE gm.user_id = ?
+`;
 const DAY = 24 * 60 * 60 * 1000;
 
 export interface VaultRow {
@@ -67,10 +75,7 @@ export class VaultService {
       | undefined;
     let role: Role | undefined;
     if (vault) {
-      const member = this.db.prepare('SELECT role FROM vault_members WHERE vault_id = ? AND user_id = ?').get(vaultId, user.id) as
-        | { role: Role }
-        | undefined;
-      role = member?.role ?? (user.isAdmin ? 'owner' : undefined);
+      role = this.effectiveRole(vaultId, user.id) ?? (user.isAdmin ? 'owner' : undefined);
     }
     if (!vault || !role) throw new HttpError(404, 'vault_not_found', 'Vault not found');
     if (ROLE_RANK[role] < ROLE_RANK[minRole]) {
@@ -79,16 +84,27 @@ export class VaultService {
     return { vault, role };
   }
 
+  /** Highest role the user has on the vault, directly or through any of their groups. */
+  effectiveRole(vaultId: string, userId: number): Role | undefined {
+    const rows = this.db.prepare(`SELECT role FROM (${USER_ROLES_SQL}) WHERE vault_id = ?`).all(userId, userId, vaultId) as Array<{ role: Role }>;
+    const rank = Math.max(0, ...rows.map((r) => ROLE_RANK[r.role]));
+    return RANK_ROLE[rank];
+  }
+
   list(user: AuthUser): Array<Record<string, unknown>> {
     const rows = this.db.prepare(`
-      SELECT v.id, v.name, v.created_at, v.current_rev, m.role, r.sha256, r.size, r.created_at AS updated_at
+      WITH best AS (
+        SELECT vault_id, MAX(CASE role WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 ELSE 1 END) AS rank
+        FROM (${USER_ROLES_SQL}) GROUP BY vault_id
+      )
+      SELECT v.id, v.name, v.created_at, v.current_rev, b.rank, r.sha256, r.size, r.created_at AS updated_at
       FROM vaults v
-      LEFT JOIN vault_members m ON m.vault_id = v.id AND m.user_id = ?
+      LEFT JOIN best b ON b.vault_id = v.id
       LEFT JOIN revisions r ON r.vault_id = v.id AND r.rev = v.current_rev
-      WHERE m.user_id IS NOT NULL OR ?
+      WHERE b.rank IS NOT NULL OR ?
       ORDER BY v.name COLLATE NOCASE
-    `).all(user.id, user.isAdmin ? 1 : 0) as unknown as Array<VaultRow & { role: Role | null; sha256: string | null; size: number | null; updated_at: number | null }>;
-    return rows.map((r) => this.describe(r, r.role ?? 'owner', r));
+    `).all(user.id, user.id, user.isAdmin ? 1 : 0) as unknown as Array<VaultRow & { rank: number | null; sha256: string | null; size: number | null; updated_at: number | null }>;
+    return rows.map((r) => this.describe(r, r.rank ? RANK_ROLE[r.rank]! : 'owner', r));
   }
 
   describe(vault: VaultRow, role: Role, current?: { sha256: string | null; size: number | null; updated_at: number | null }): Record<string, unknown> {
@@ -113,13 +129,15 @@ export class VaultService {
       | undefined;
   }
 
-  create(user: AuthUser, name: string): VaultRow {
+  create(user: AuthUser, name: string, groups: Array<{ groupId: number; role: Role }> = []): VaultRow {
     const vault: VaultRow = { id: crypto.randomUUID(), name, created_at: now(), current_rev: 0 };
     transaction(this.db, () => {
       this.db.prepare('INSERT INTO vaults (id, name, created_by, created_at, current_rev) VALUES (?, ?, ?, ?, 0)').run(
         vault.id, name, user.id, vault.created_at,
       );
       this.db.prepare("INSERT INTO vault_members (vault_id, user_id, role) VALUES (?, ?, 'owner')").run(vault.id, user.id);
+      const share = this.db.prepare('INSERT OR REPLACE INTO vault_groups (vault_id, group_id, role) VALUES (?, ?, ?)');
+      for (const g of groups) share.run(vault.id, g.groupId, g.role);
     });
     return vault;
   }

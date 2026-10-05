@@ -16,15 +16,30 @@ export class ApiError extends Error {
   }
 }
 
+export type Role = 'owner' | 'editor' | 'reader';
+
 export interface VaultInfo {
   id: string;
   name: string;
-  role: 'owner' | 'editor' | 'reader';
+  role: Role;
   revision: number;
   sha256: string | null;
   size: number | null;
   updatedAt: string | null;
   conflicts: number;
+}
+
+export interface GroupInfo {
+  id: number;
+  name: string;
+  createdAt: string;
+  members: Array<{ userId: number; username: string }>;
+}
+
+export interface VaultGroup {
+  groupId: number;
+  name: string;
+  role: Role;
 }
 
 export interface Download {
@@ -119,8 +134,48 @@ export class KpsApi {
     return this.json<VaultInfo>('GET', `/api/v1/vaults/${encodeURIComponent(id)}`);
   }
 
-  createVault(name: string) {
-    return this.json<VaultInfo>('POST', '/api/v1/vaults', { name });
+  /** Creates a vault; `groups` shares it with those groups right away. */
+  createVault(name: string, groups?: Array<{ name: string; role: Role }>) {
+    return this.json<VaultInfo>('POST', '/api/v1/vaults', groups?.length ? { name, groups } : { name });
+  }
+
+  // --- groups (create/rename/delete/members are administrator only) ---------------------------
+
+  listGroups() {
+    return this.json<GroupInfo[]>('GET', '/api/v1/groups');
+  }
+
+  createGroup(name: string, members: string[] = []) {
+    return this.json<GroupInfo>('POST', '/api/v1/groups', { name, members });
+  }
+
+  renameGroup(groupId: number, name: string) {
+    return this.json<GroupInfo>('PATCH', `/api/v1/groups/${groupId}`, { name });
+  }
+
+  async deleteGroup(groupId: number): Promise<void> {
+    await this.json('DELETE', `/api/v1/groups/${groupId}`);
+  }
+
+  addGroupMember(groupId: number, username: string) {
+    return this.json<GroupInfo>('PUT', `/api/v1/groups/${groupId}/members/${encodeURIComponent(username)}`);
+  }
+
+  removeGroupMember(groupId: number, username: string) {
+    return this.json<GroupInfo>('DELETE', `/api/v1/groups/${groupId}/members/${encodeURIComponent(username)}`);
+  }
+
+  vaultGroups(vaultId: string) {
+    return this.json<VaultGroup[]>('GET', `/api/v1/vaults/${encodeURIComponent(vaultId)}/groups`);
+  }
+
+  /** Owner: gives a group a role on the vault (or changes it). */
+  shareWithGroup(vaultId: string, groupName: string, role: Role) {
+    return this.json<VaultGroup>('PUT', `/api/v1/vaults/${encodeURIComponent(vaultId)}/groups/${encodeURIComponent(groupName)}`, { role });
+  }
+
+  async unshareGroup(vaultId: string, groupName: string): Promise<void> {
+    await this.json('DELETE', `/api/v1/vaults/${encodeURIComponent(vaultId)}/groups/${encodeURIComponent(groupName)}`);
   }
 
   /** Downloads the current database, or returns null when it is still at `knownRevision`. */

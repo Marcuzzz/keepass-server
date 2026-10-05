@@ -31,12 +31,25 @@ function publicUser(u: Pick<UserRow, 'id' | 'username' | 'is_admin' | 'disabled'
   };
 }
 
+interface GroupRow {
+  id: number;
+  name: string;
+  created_at: number;
+}
+
 function badRequest(fn: () => string): string {
   try {
     return fn();
   } catch (err) {
     throw new HttpError(400, 'invalid_request', (err as Error).message);
   }
+}
+
+function parseRole(value: unknown): Role {
+  if (typeof value !== 'string' || !ROLES.includes(value as Role)) {
+    throw new HttpError(400, 'invalid_request', `role must be one of ${ROLES.join(', ')}`);
+  }
+  return value as Role;
 }
 
 function intParam(value: string | undefined, name: string): number {
@@ -223,6 +236,119 @@ export function buildApi(db: Db, config: Config, vaults: VaultService): { router
     sendJson(ctx.res, 200, { ok: true });
   });
 
+  // --- groups ---------------------------------------------------------------------------------------
+
+  const getGroup = (id: number): GroupRow => {
+    const row = db.prepare('SELECT id, name, created_at FROM groups WHERE id = ?').get(id) as GroupRow | undefined;
+    if (!row) throw new HttpError(404, 'group_not_found', 'Group not found');
+    return row;
+  };
+
+  const groupByName = (name: string): GroupRow => {
+    const row = db.prepare('SELECT id, name, created_at FROM groups WHERE name = ?').get(name) as GroupRow | undefined;
+    if (!row) throw new HttpError(404, 'group_not_found', `Group not found: ${name}`);
+    return row;
+  };
+
+  const userIdByName = (username: string): number => {
+    const row = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: number } | undefined;
+    if (!row) throw new HttpError(404, 'user_not_found', `User not found: ${username}`);
+    return row.id;
+  };
+
+  const describeGroup = (g: GroupRow) => {
+    const members = db.prepare(`
+      SELECT u.id, u.username FROM group_members gm JOIN users u ON u.id = gm.user_id
+      WHERE gm.group_id = ? ORDER BY u.username COLLATE NOCASE
+    `).all(g.id) as Array<{ id: number; username: string }>;
+    return {
+      id: g.id,
+      name: g.name,
+      createdAt: new Date(g.created_at).toISOString(),
+      members: members.map((m) => ({ userId: m.id, username: m.username })),
+    };
+  };
+
+  const isGroupMember = (groupId: number, userId: number): boolean =>
+    !!db.prepare('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?').get(groupId, userId);
+
+  const usernameList = (value: unknown): string[] => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+      throw new HttpError(400, 'invalid_request', 'Field "members" must be an array of usernames');
+    }
+    return value as string[];
+  };
+
+  router.add('GET', '/api/v1/groups', (ctx) => {
+    const user = requireUser(ctx);
+    // Administrators see every group; other users the groups they belong to.
+    const rows = (user.isAdmin
+      ? db.prepare('SELECT id, name, created_at FROM groups ORDER BY name COLLATE NOCASE').all()
+      : db.prepare(`
+          SELECT g.id, g.name, g.created_at FROM groups g JOIN group_members gm ON gm.group_id = g.id
+          WHERE gm.user_id = ? ORDER BY g.name COLLATE NOCASE
+        `).all(user.id)) as unknown as GroupRow[];
+    sendJson(ctx.res, 200, rows.map(describeGroup));
+  });
+
+  router.add('POST', '/api/v1/groups', async (ctx) => {
+    requireAdmin(ctx);
+    const body = await readJson(ctx.req);
+    const name = requireString(body, 'name', 64);
+    const memberIds = usernameList(body.members).map(userIdByName);
+    if (db.prepare('SELECT 1 FROM groups WHERE name = ?').get(name)) {
+      throw new HttpError(409, 'group_exists', 'Group name already taken');
+    }
+    const id = transaction(db, () => {
+      const result = db.prepare('INSERT INTO groups (name, created_at) VALUES (?, ?)').run(name, now());
+      const groupId = Number(result.lastInsertRowid);
+      const add = db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)');
+      for (const userId of memberIds) add.run(groupId, userId);
+      return groupId;
+    });
+    sendJson(ctx.res, 201, describeGroup(getGroup(id)));
+  });
+
+  router.add('GET', '/api/v1/groups/:id', (ctx) => {
+    const user = requireUser(ctx);
+    const group = getGroup(intParam(ctx.params.id, 'group id'));
+    if (!user.isAdmin && !isGroupMember(group.id, user.id)) throw new HttpError(404, 'group_not_found', 'Group not found');
+    sendJson(ctx.res, 200, describeGroup(group));
+  });
+
+  router.add('PATCH', '/api/v1/groups/:id', async (ctx) => {
+    requireAdmin(ctx);
+    const group = getGroup(intParam(ctx.params.id, 'group id'));
+    const name = requireString(await readJson(ctx.req), 'name', 64);
+    const clash = db.prepare('SELECT id FROM groups WHERE name = ?').get(name) as { id: number } | undefined;
+    if (clash && clash.id !== group.id) throw new HttpError(409, 'group_exists', 'Group name already taken');
+    db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(name, group.id);
+    sendJson(ctx.res, 200, describeGroup(getGroup(group.id)));
+  });
+
+  router.add('DELETE', '/api/v1/groups/:id', (ctx) => {
+    requireAdmin(ctx);
+    const group = getGroup(intParam(ctx.params.id, 'group id'));
+    db.prepare('DELETE FROM groups WHERE id = ?').run(group.id);
+    sendJson(ctx.res, 200, { ok: true });
+  });
+
+  router.add('PUT', '/api/v1/groups/:id/members/:username', (ctx) => {
+    requireAdmin(ctx);
+    const group = getGroup(intParam(ctx.params.id, 'group id'));
+    db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)').run(group.id, userIdByName(ctx.params.username!));
+    sendJson(ctx.res, 200, describeGroup(group));
+  });
+
+  router.add('DELETE', '/api/v1/groups/:id/members/:username', (ctx) => {
+    requireAdmin(ctx);
+    const group = getGroup(intParam(ctx.params.id, 'group id'));
+    const result = db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(group.id, userIdByName(ctx.params.username!));
+    if (result.changes === 0) throw new HttpError(404, 'member_not_found', 'User is not a member of this group');
+    sendJson(ctx.res, 200, describeGroup(group));
+  });
+
   // --- vaults ---------------------------------------------------------------------------------------
 
   router.add('GET', '/api/v1/vaults', (ctx) => {
@@ -231,8 +357,17 @@ export function buildApi(db: Db, config: Config, vaults: VaultService): { router
 
   router.add('POST', '/api/v1/vaults', async (ctx) => {
     const user = requireUser(ctx);
-    const name = requireString(await readJson(ctx.req), 'name', 200);
-    const vault = vaults.create(user, name);
+    const body = await readJson(ctx.req);
+    const name = requireString(body, 'name', 200);
+    // Optional: share the new vault with groups right away, e.g. [{ "name": "family", "role": "editor" }].
+    if (body.groups !== undefined && !Array.isArray(body.groups)) {
+      throw new HttpError(400, 'invalid_request', 'Field "groups" must be an array of { name, role }');
+    }
+    const shares = ((body.groups ?? []) as unknown[]).map((g) => {
+      const entry = (g && typeof g === 'object' ? g : {}) as Record<string, unknown>;
+      return { groupId: groupByName(requireString(entry, 'name', 64)).id, role: parseRole(entry.role) };
+    });
+    const vault = vaults.create(user, name, shares);
     sendJson(ctx.res, 201, vaults.describe(vault, 'owner'));
   });
 
@@ -395,10 +530,7 @@ export function buildApi(db: Db, config: Config, vaults: VaultService): { router
 
   router.add('PUT', '/api/v1/vaults/:id/members/:username', async (ctx) => {
     const { vault } = vaults.access(ctx.params.id!, requireUser(ctx), 'owner');
-    const role = (await readJson(ctx.req)).role;
-    if (typeof role !== 'string' || !ROLES.includes(role as Role)) {
-      throw new HttpError(400, 'invalid_request', `role must be one of ${ROLES.join(', ')}`);
-    }
+    const role = parseRole((await readJson(ctx.req)).role);
     const target = memberTarget(vault.id, ctx.params.username!);
     if (target.role === 'owner' && role !== 'owner' && ownerCount(vault.id) <= 1) {
       throw new HttpError(409, 'last_owner', 'A vault needs at least one owner');
@@ -416,6 +548,34 @@ export function buildApi(db: Db, config: Config, vaults: VaultService): { router
       throw new HttpError(409, 'last_owner', 'A vault needs at least one owner');
     }
     db.prepare('DELETE FROM vault_members WHERE vault_id = ? AND user_id = ?').run(vault.id, target.userId);
+    sendJson(ctx.res, 200, { ok: true });
+  });
+
+  // --- group access -------------------------------------------------------------------------------
+
+  router.add('GET', '/api/v1/vaults/:id/groups', (ctx) => {
+    const { vault } = vaults.access(ctx.params.id!, requireUser(ctx));
+    const rows = db.prepare(`
+      SELECT g.id, g.name, vg.role FROM vault_groups vg JOIN groups g ON g.id = vg.group_id
+      WHERE vg.vault_id = ? ORDER BY g.name COLLATE NOCASE
+    `).all(vault.id) as Array<{ id: number; name: string; role: Role }>;
+    sendJson(ctx.res, 200, rows.map((r) => ({ groupId: r.id, name: r.name, role: r.role })));
+  });
+
+  router.add('PUT', '/api/v1/vaults/:id/groups/:name', async (ctx) => {
+    const { vault } = vaults.access(ctx.params.id!, requireUser(ctx), 'owner');
+    const role = parseRole((await readJson(ctx.req)).role);
+    const group = groupByName(ctx.params.name!);
+    db.prepare('INSERT INTO vault_groups (vault_id, group_id, role) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET role = excluded.role')
+      .run(vault.id, group.id, role);
+    sendJson(ctx.res, 200, { groupId: group.id, name: group.name, role });
+  });
+
+  router.add('DELETE', '/api/v1/vaults/:id/groups/:name', (ctx) => {
+    const { vault } = vaults.access(ctx.params.id!, requireUser(ctx), 'owner');
+    const group = groupByName(ctx.params.name!);
+    const result = db.prepare('DELETE FROM vault_groups WHERE vault_id = ? AND group_id = ?').run(vault.id, group.id);
+    if (result.changes === 0) throw new HttpError(404, 'group_not_found', 'Group has no access to this vault');
     sendJson(ctx.res, 200, { ok: true });
   });
 

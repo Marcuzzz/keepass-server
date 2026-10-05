@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { parseArgs } from 'node:util';
-import { ApiError, KpsApi, OfflineError } from './api.ts';
+import { ApiError, KpsApi, OfflineError, type Role } from './api.ts';
 import { credentials, kdbxweb, loadKdbx } from './kdbx.ts';
 import { LocalVault, type SyncResult } from './sync.ts';
 
@@ -18,7 +18,12 @@ const USAGE = `kps - reference client for keepass-server
   kps login <url> <username> [--device <name>]
   kps logout
   kps vaults                                 List vaults on the server (and local sync state)
-  kps create <name> [--from <file.kdbx>]     Create a vault: upload a file, or start a new database
+  kps create <name> [--from <file.kdbx>] [--group <group>:<role> ...]
+                                             Create a vault: upload a file, or start a new database;
+                                             --group shares it with a group (role: owner|editor|reader)
+  kps groups                                 List your groups (administrators: all groups)
+  kps share <vault-id> <group> <role>        Give a group access to a vault (owner)
+  kps unshare <vault-id> <group>             Remove a group's access to a vault (owner)
   kps clone <vault-id>                       Download a vault into the local cache
   kps sync [<vault-id>]                      Sync one or all local vaults
   kps offline <vault-id> on|off              Work offline (never contact the server) or go back online
@@ -32,6 +37,8 @@ const USAGE = `kps - reference client for keepass-server
   kps remote-put <vault-id> <file>           Upload command:    kps remote-put <id> {TEMP_DATABASE}
 
 Environment: KPS_HOME (default ~/.kps), KPS_PASSWORD (account), KPS_DB_PASSWORD (master password)`;
+
+const ROLES: Role[] = ['owner', 'editor', 'reader'];
 
 interface Session {
   serverUrl: string;
@@ -143,9 +150,17 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   },
 
   async create(args) {
-    const { values, positionals } = parseArgs({ args, options: { from: { type: 'string' } }, allowPositionals: true });
+    const { values, positionals } = parseArgs({
+      args, options: { from: { type: 'string' }, group: { type: 'string', multiple: true } }, allowPositionals: true,
+    });
     const [name] = positionals;
     if (!name) throw new Error(USAGE);
+    const groups = (values.group ?? []).map((spec) => {
+      const at = spec.lastIndexOf(':');
+      const role = spec.slice(at + 1);
+      if (at <= 0 || !ROLES.includes(role as Role)) throw new Error(`--group must look like <group>:${ROLES.join('|')}`);
+      return { name: spec.slice(0, at), role: role as Role };
+    });
     const client = await api();
     let db: kdbxweb.Kdbx;
     const creds = await masterCredentials();
@@ -154,11 +169,31 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
     } else {
       db = kdbxweb.Kdbx.create(creds, name);
     }
-    const info = await client.createVault(name);
+    const info = await client.createVault(name, groups);
     const vault = await LocalVault.create(vaultDir(info.id), { serverUrl: client.baseUrl, vaultId: info.id, vaultName: name });
     await vault.save(db);
     await syncOne(client, vault, creds);
     out(`Vault id: ${info.id}`);
+  },
+
+  async groups() {
+    for (const g of await (await api()).listGroups()) {
+      out(`${g.name}  (${g.members.length} member${g.members.length === 1 ? '' : 's'}): ${g.members.map((m) => m.username).join(', ')}`);
+    }
+  },
+
+  async share(args) {
+    const [vaultId, group, role] = args;
+    if (!vaultId || !group || !ROLES.includes(role as Role)) throw new Error(USAGE);
+    await (await api()).shareWithGroup(vaultId, group, role as Role);
+    out(`Group ${group} now has ${role} access`);
+  },
+
+  async unshare(args) {
+    const [vaultId, group] = args;
+    if (!vaultId || !group) throw new Error(USAGE);
+    await (await api()).unshareGroup(vaultId, group);
+    out(`Group ${group} no longer has access`);
   },
 
   async clone(args) {

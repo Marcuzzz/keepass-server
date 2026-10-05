@@ -61,6 +61,9 @@ async function download(path, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+const ROLE_OPTIONS = ['editor', 'reader', 'owner'];
+const roleSelect = (name = 'role') => h('select', { name, 'aria-label': 'Role' }, ROLE_OPTIONS.map((r) => h('option', { value: r }, r)));
+
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
 const fmtSize = (n) => (n == null ? '—' : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 const field = (form, name) => form.elements.namedItem(name).value;
@@ -90,15 +93,21 @@ function renderLogin() {
 }
 
 async function renderVaults() {
-  const vaults = await api('GET', '/vaults');
+  const [vaults, groups] = await Promise.all([api('GET', '/vaults'), api('GET', '/groups')]);
   const create = h('form', { class: 'row', onsubmit: action(async () => {
-    const vault = await api('POST', '/vaults', { name: field(create, 'name') });
+    const group = groups.length ? field(create, 'group') : '';
+    const body = { name: field(create, 'name') };
+    if (group) body.groups = [{ name: group, role: field(create, 'groupRole') }];
+    const vault = await api('POST', '/vaults', body);
     const file = create.elements.namedItem('file').files[0];
     if (file) await api('PUT', `/vaults/${vault.id}/content`, await file.arrayBuffer(), { 'If-Match': '"0"', 'Content-Type': 'application/octet-stream' });
     return `Vault "${vault.name}" created`;
   }, renderVaults) },
   h('input', { name: 'name', placeholder: 'Vault name', required: true, 'aria-label': 'Vault name' }),
   h('label', { class: 'row' }, 'Upload existing .kdbx (optional)', h('input', { name: 'file', type: 'file', accept: '.kdbx' })),
+  groups.length ? h('label', { class: 'row' }, 'Share with group',
+    h('select', { name: 'group', 'aria-label': 'Group' }, h('option', { value: '' }, '(none)'), groups.map((g) => h('option', { value: g.name }, g.name))),
+    roleSelect('groupRole')) : null,
   h('button', { class: 'primary', type: 'submit' }, 'Create vault'));
 
   main.replaceChildren(
@@ -118,8 +127,9 @@ async function renderVaults() {
 }
 
 async function renderVault(id) {
-  const [vault, revisions, conflicts, members] = await Promise.all([
+  const [vault, revisions, conflicts, members, vaultGroups, groups] = await Promise.all([
     api('GET', `/vaults/${id}`), api('GET', `/vaults/${id}/revisions`), api('GET', `/vaults/${id}/conflicts`), api('GET', `/vaults/${id}/members`),
+    api('GET', `/vaults/${id}/groups`), api('GET', '/groups'),
   ]);
   const rerender = () => renderVault(id);
   const isOwner = vault.role === 'owner';
@@ -130,7 +140,17 @@ async function renderVault(id) {
     return 'Member saved';
   }, rerender) },
   h('input', { name: 'username', placeholder: 'Username', required: true, 'aria-label': 'Username' }),
-  h('select', { name: 'role', 'aria-label': 'Role' }, ['editor', 'reader', 'owner'].map((r) => h('option', { value: r }, r))),
+  roleSelect(),
+  h('button', { type: 'submit' }, 'Add / change'));
+
+  // Owners who are not administrators only see their own groups, so the name can also be typed.
+  const addGroup = h('form', { class: 'row', onsubmit: action(async () => {
+    await api('PUT', `/vaults/${id}/groups/${encodeURIComponent(field(addGroup, 'group'))}`, { role: field(addGroup, 'role') });
+    return 'Group access saved';
+  }, rerender) },
+  h('input', { name: 'group', placeholder: 'Group name', required: true, list: 'group-names', 'aria-label': 'Group name' }),
+  h('datalist', { id: 'group-names' }, groups.map((g) => h('option', { value: g.name }))),
+  roleSelect(),
   h('button', { type: 'submit' }, 'Add / change'));
 
   const rename = h('form', { class: 'row', onsubmit: action(async () => {
@@ -188,6 +208,16 @@ async function renderVault(id) {
         }, rerender) }, 'Remove') : null),
       ))),
       isOwner ? [h('h3', {}, 'Add member'), addMember] : null),
+    h('section', { class: 'card' }, h('h2', {}, 'Groups'),
+      h('p', { class: 'muted' }, 'Every member of a group gets its role. A user\'s role is the highest of their own role and their groups\' roles.'),
+      table(['Group', 'Role', ''], vaultGroups.map((g) => h('tr', {},
+        h('td', {}, g.name), h('td', {}, h('span', { class: 'badge' }, g.role)),
+        h('td', { class: 'actions' }, isOwner ? h('button', { class: 'danger', onclick: action(async () => {
+          await api('DELETE', `/vaults/${id}/groups/${encodeURIComponent(g.name)}`);
+          return `Group ${g.name} removed`;
+        }, rerender) }, 'Remove') : null),
+      ))),
+      isOwner ? [h('h3', {}, 'Add group'), addGroup] : null),
   );
 }
 
@@ -226,6 +256,56 @@ async function renderUsers() {
   );
 }
 
+async function renderGroups() {
+  const groups = await api('GET', '/groups');
+  const create = h('form', { class: 'row', onsubmit: action(async () => {
+    const members = field(create, 'members').split(',').map((m) => m.trim()).filter(Boolean);
+    await api('POST', '/groups', { name: field(create, 'name'), members });
+    return 'Group created';
+  }, renderGroups) },
+  h('input', { name: 'name', placeholder: 'Group name', required: true, autocomplete: 'off', 'aria-label': 'Group name' }),
+  h('input', { name: 'members', placeholder: 'Members (comma separated, optional)', autocomplete: 'off', 'aria-label': 'Members' }),
+  h('button', { class: 'primary', type: 'submit' }, 'Create group'));
+
+  const addMember = (g) => {
+    const form = h('form', { class: 'row', onsubmit: action(async () => {
+      await api('PUT', `/groups/${g.id}/members/${encodeURIComponent(field(form, 'username'))}`);
+      return 'Member added';
+    }, renderGroups) },
+    h('input', { name: 'username', placeholder: 'Username', required: true, autocomplete: 'off', 'aria-label': `Add member to ${g.name}` }),
+    h('button', { type: 'submit' }, 'Add'));
+    return form;
+  };
+
+  main.replaceChildren(
+    h('section', { class: 'card' }, h('h2', {}, 'Groups'),
+      h('p', { class: 'muted' }, 'Vault owners give a group a role on a vault (on the vault page); every member gets that role.'),
+      table(['Group', 'Members', 'Created', ''], groups.map((g) => h('tr', {},
+        h('td', {}, g.name),
+        h('td', {},
+          g.members.map((m) => h('span', { class: 'badge' }, m.username, ' ', h('button', { class: 'danger', 'aria-label': `Remove ${m.username} from ${g.name}`, onclick: action(async () => {
+            await api('DELETE', `/groups/${g.id}/members/${encodeURIComponent(m.username)}`);
+            return `${m.username} removed`;
+          }, renderGroups) }, '×'))),
+          addMember(g)),
+        h('td', {}, fmtDate(g.createdAt)),
+        h('td', { class: 'actions' },
+          h('button', { onclick: action(async () => {
+            const name = window.prompt(`New name for ${g.name}`, g.name);
+            if (!name) return null;
+            await api('PATCH', `/groups/${g.id}`, { name });
+            return 'Group renamed';
+          }, renderGroups) }, 'Rename'), ' ',
+          h('button', { class: 'danger', onclick: action(async () => {
+            if (!window.confirm(`Delete group ${g.name}? Its members lose the vault access they had through it.`)) return null;
+            await api('DELETE', `/groups/${g.id}`);
+            return 'Group deleted';
+          }, renderGroups) }, 'Delete')),
+      )))),
+    h('section', { class: 'card' }, h('h2', {}, 'New group'), create),
+  );
+}
+
 async function renderAccount() {
   const tokens = await api('GET', '/me/tokens');
   const pw = h('form', { class: 'stack', onsubmit: action(async () => {
@@ -261,7 +341,7 @@ function signOut() {
   renderLogin();
 }
 
-const views = { vaults: renderVaults, users: renderUsers, account: renderAccount };
+const views = { vaults: renderVaults, users: renderUsers, groups: renderGroups, account: renderAccount };
 
 document.getElementById('nav').addEventListener('click', (e) => {
   const view = e.target.closest('button')?.dataset.view;
@@ -278,6 +358,7 @@ async function start() {
   }
   document.getElementById('nav').hidden = false;
   document.getElementById('nav-users').hidden = !state.me.isAdmin;
+  document.getElementById('nav-groups').hidden = !state.me.isAdmin;
   await action(renderVaults)();
 }
 

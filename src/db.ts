@@ -67,6 +67,29 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_members_user ON vault_members(user_id);
   CREATE INDEX idx_conflicts_vault ON conflicts(vault_id);
   `,
+  `
+  CREATE TABLE groups (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE group_members (
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (group_id, user_id)
+  );
+
+  CREATE TABLE vault_groups (
+    vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    role     TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'reader')),
+    PRIMARY KEY (vault_id, group_id)
+  );
+
+  CREATE INDEX idx_group_members_user ON group_members(user_id);
+  CREATE INDEX idx_vault_groups_group ON vault_groups(group_id);
+  `,
 ];
 
 export type Db = DatabaseSync;

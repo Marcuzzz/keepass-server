@@ -86,7 +86,11 @@ Server accounts control who may download and upload a vault (`owner` manages mem
 share outside the server. To remove someone's access to the secrets, remove the member **and** change the
 master key; they keep their old copy and old master key, as with any shared password file.
 
-Administrators manage accounts and can see and manage every vault's metadata (not its contents).
+Administrators can also put users into **groups**. A vault owner can give a group a role on the vault, and every
+member gets that role; a user's role is the highest of their direct role and their group roles. Group roles
+don't count for the "last owner" rule: every vault keeps at least one direct owner.
+
+Administrators manage accounts and groups, and can see and manage every vault's metadata (not its contents).
 
 ## Security notes
 

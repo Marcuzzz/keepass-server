@@ -43,3 +43,5 @@ a { color: var(--accent); cursor: pointer; }
 #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 8px; max-width: calc(100% - 32px); }
 #toast.error { background: var(--danger); color: #fff; }
 .confirm { display: inline-flex; gap: 6px; align-items: center; }
+.badge button { border: none; background: none; padding: 0 2px; line-height: 1; }
+td .badge { margin: 0 4px 4px 0; }

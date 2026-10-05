@@ -217,3 +217,119 @@ describe('sharing', () => {
     assert.equal((await call(server.url, admin.token, 'DELETE', `/api/v1/vaults/${vault.id}/members/${ADMIN.username}`)).status, 409);
   });
 });
+
+describe('groups', () => {
+  const createGroup = async (name: string, members: string[] = []): Promise<{ id: number; name: string }> => {
+    const res = await call(server.url, admin.token, 'POST', '/api/v1/groups', { name, members });
+    assert.equal(res.status, 201);
+    return res.json();
+  };
+
+  it('Should_ForbidGroupAdmin_When_NotAdmin', async () => {
+    const mallory = await createUser(server.url, admin.token!, 'mallory-groups');
+    const group = await createGroup('admin-only');
+    assert.equal((await call(server.url, mallory.token, 'POST', '/api/v1/groups', { name: 'mine' })).status, 403);
+    assert.equal((await call(server.url, mallory.token, 'PATCH', `/api/v1/groups/${group.id}`, { name: 'x' })).status, 403);
+    assert.equal((await call(server.url, mallory.token, 'PUT', `/api/v1/groups/${group.id}/members/mallory-groups`)).status, 403);
+    assert.equal((await call(server.url, mallory.token, 'DELETE', `/api/v1/groups/${group.id}`)).status, 403);
+  });
+
+  it('Should_RejectGroup_When_NameTakenOrMemberUnknown', async () => {
+    await createGroup('Duplicate');
+    assert.equal((await call(server.url, admin.token, 'POST', '/api/v1/groups', { name: 'duplicate' })).status, 409);
+    assert.equal((await call(server.url, admin.token, 'POST', '/api/v1/groups', { name: 'ghosts', members: ['nobody-here'] })).status, 404);
+  });
+
+  it('Should_ListOnlyOwnGroups_When_NotAdmin', async () => {
+    const dave = await createUser(server.url, admin.token!, 'dave-groups');
+    await createGroup('dave-team', ['dave-groups']);
+    await createGroup('not-dave');
+    const res = await call(server.url, dave.token, 'GET', '/api/v1/groups');
+    assert.deepEqual(((await res.json()) as Array<{ name: string }>).map((g) => g.name), ['dave-team']);
+  });
+
+  it('Should_GrantGroupRole_When_GroupAddedToVault', async () => {
+    const vault = await admin.createVault('Group shared');
+    await admin.upload(vault.id, kdbxA, 0);
+    const frank = await createUser(server.url, admin.token!, 'frank-groups');
+    const group = await createGroup('readers', ['frank-groups']);
+    assert.equal((await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/groups/readers`, { role: 'reader' })).status, 200);
+
+    assert.deepEqual((await frank.listVaults()).map((v) => [v.name, v.role]), [['Group shared', 'reader']]);
+    assert.deepEqual((await frank.download(vault.id))?.data, kdbxA);
+    await assert.rejects(frank.upload(vault.id, kdbxB, 1), (err: ApiError) => err.status === 403);
+
+    // removing the user from the group revokes access
+    await call(server.url, admin.token, 'DELETE', `/api/v1/groups/${group.id}/members/frank-groups`);
+    await assert.rejects(frank.download(vault.id), (err: ApiError) => err.status === 404);
+    // adding back, then removing the group from the vault revokes access too
+    await call(server.url, admin.token, 'PUT', `/api/v1/groups/${group.id}/members/frank-groups`);
+    assert.equal((await frank.listVaults()).length, 1);
+    assert.equal((await call(server.url, admin.token, 'DELETE', `/api/v1/vaults/${vault.id}/groups/readers`)).status, 200);
+    await assert.rejects(frank.download(vault.id), (err: ApiError) => err.status === 404);
+  });
+
+  it('Should_UseHighestRole_When_DirectAndGroupRolesDiffer', async () => {
+    const vault = await admin.createVault('Highest role');
+    await admin.upload(vault.id, kdbxA, 0);
+    const gina = await createUser(server.url, admin.token!, 'gina-groups');
+    await createGroup('editors', ['gina-groups']);
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/members/gina-groups`, { role: 'reader' });
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/groups/editors`, { role: 'editor' });
+    assert.equal((await gina.getVault(vault.id)).role, 'editor');
+    assert.equal((await gina.upload(vault.id, kdbxB, 1)).revision, 2);
+  });
+
+  it('Should_ShareNewVault_When_CreatedWithGroups', async () => {
+    const hank = await createUser(server.url, admin.token!, 'hank-groups');
+    await createGroup('family', ['hank-groups']);
+    const res = await call(server.url, admin.token, 'POST', '/api/v1/vaults', { name: 'Family', groups: [{ name: 'family', role: 'editor' }] });
+    assert.equal(res.status, 201);
+    const vault = (await res.json()) as { id: string };
+    assert.equal((await hank.getVault(vault.id)).role, 'editor');
+    const groups = await call(server.url, hank.token, 'GET', `/api/v1/vaults/${vault.id}/groups`);
+    assert.deepEqual(((await groups.json()) as Array<{ name: string; role: string }>).map((g) => [g.name, g.role]), [['family', 'editor']]);
+  });
+
+  it('Should_NotCreateVault_When_GroupUnknown', async () => {
+    const before = (await admin.listVaults()).length;
+    const res = await call(server.url, admin.token, 'POST', '/api/v1/vaults', { name: 'Orphan', groups: [{ name: 'no-such-group', role: 'reader' }] });
+    assert.equal(res.status, 404);
+    assert.equal((await admin.listVaults()).length, before);
+  });
+
+  it('Should_RevokeVaultAccess_When_GroupDeleted', async () => {
+    const vault = await admin.createVault('Deleted group');
+    const ivy = await createUser(server.url, admin.token!, 'ivy-groups');
+    const group = await createGroup('temporary', ['ivy-groups']);
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/groups/temporary`, { role: 'reader' });
+    assert.equal((await ivy.listVaults()).length, 1);
+    assert.equal((await call(server.url, admin.token, 'DELETE', `/api/v1/groups/${group.id}`)).status, 200);
+    assert.equal((await ivy.listVaults()).length, 0);
+  });
+
+  it('Should_ManageGroupsAndSharing_When_UsingClientApi', async () => {
+    const kim = await createUser(server.url, admin.token!, 'kim-groups');
+    const group = await admin.createGroup('client-api');
+    await admin.addGroupMember(group.id, 'kim-groups');
+    const vault = await admin.createVault('Client api', [{ name: 'client-api', role: 'reader' }]);
+    assert.equal((await kim.getVault(vault.id)).role, 'reader');
+    await admin.shareWithGroup(vault.id, 'client-api', 'editor');
+    assert.deepEqual((await kim.vaultGroups(vault.id)).map((g) => g.role), ['editor']);
+    assert.equal((await admin.renameGroup(group.id, 'client-api-2')).name, 'client-api-2');
+    assert.deepEqual((await kim.listGroups()).map((g) => g.name), ['client-api-2']);
+    await admin.unshareGroup(vault.id, 'client-api-2');
+    await assert.rejects(kim.getVault(vault.id), (err: ApiError) => err.status === 404);
+    await admin.removeGroupMember(group.id, 'kim-groups');
+    await admin.deleteGroup(group.id);
+    assert.equal((await kim.listGroups()).length, 0);
+  });
+
+  it('Should_ForbidGroupSharing_When_NotOwner', async () => {
+    const vault = await admin.createVault('Owner only sharing');
+    const jack = await createUser(server.url, admin.token!, 'jack2-groups');
+    await createGroup('jacks', ['jack2-groups']);
+    await call(server.url, admin.token, 'PUT', `/api/v1/vaults/${vault.id}/groups/jacks`, { role: 'editor' });
+    assert.equal((await call(server.url, jack.token, 'PUT', `/api/v1/vaults/${vault.id}/groups/jacks`, { role: 'owner' })).status, 403);
+  });
+});

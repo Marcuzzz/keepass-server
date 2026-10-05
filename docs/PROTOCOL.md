@@ -54,7 +54,8 @@ The reference implementation is `KpsApi.testConnection` in `client/api.ts`.
 
 Vaults the caller cannot see return `404`, never `403`.
 
-A user's `role` on a vault is the highest of their direct role and the roles of their groups.
+A user's `role` on a vault is the highest of their direct role and the roles of their groups. Administrators are
+`owner` of every vault.
 
 ## Client sync algorithm
 

@@ -73,10 +73,8 @@ export class VaultService {
     const vault = this.db.prepare('SELECT id, name, created_at, current_rev FROM vaults WHERE id = ?').get(vaultId) as
       | VaultRow
       | undefined;
-    let role: Role | undefined;
-    if (vault) {
-      role = this.effectiveRole(vaultId, user.id) ?? (user.isAdmin ? 'owner' : undefined);
-    }
+    // Administrators are owners of every vault, also where a membership or group gives them a lower role.
+    const role = vault ? (user.isAdmin ? 'owner' : this.effectiveRole(vaultId, user.id)) : undefined;
     if (!vault || !role) throw new HttpError(404, 'vault_not_found', 'Vault not found');
     if (ROLE_RANK[role] < ROLE_RANK[minRole]) {
       throw new HttpError(403, 'forbidden', `Requires ${minRole} access to this vault`);
@@ -104,7 +102,7 @@ export class VaultService {
       WHERE b.rank IS NOT NULL OR ?
       ORDER BY v.name COLLATE NOCASE
     `).all(user.id, user.id, user.isAdmin ? 1 : 0) as unknown as Array<VaultRow & { rank: number | null; sha256: string | null; size: number | null; updated_at: number | null }>;
-    return rows.map((r) => this.describe(r, r.rank ? RANK_ROLE[r.rank]! : 'owner', r));
+    return rows.map((r) => this.describe(r, user.isAdmin || !r.rank ? 'owner' : RANK_ROLE[r.rank]!, r));
   }
 
   describe(vault: VaultRow, role: Role, current?: { sha256: string | null; size: number | null; updated_at: number | null }): Record<string, unknown> {

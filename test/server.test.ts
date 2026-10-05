@@ -353,6 +353,17 @@ describe('rename and duplicate', () => {
     await assert.rejects(admin.getVault(vault.id), (err: ApiError) => err.status === 404);
   });
 
+  it('Should_TreatAdminAsOwner_When_GroupGivesLowerRole', async () => {
+    const owner = await createUser(server.url, admin.token!, 'admin-role-owner');
+    const vault = await owner.createVault('admin-role-vault');
+    await admin.createGroup('admin-role-group', ['admin']);
+    await owner.shareWithGroup(vault.id, 'admin-role-group', 'reader');
+    assert.equal((await admin.getVault(vault.id)).role, 'owner');
+    assert.equal((await admin.listVaults()).find((v) => v.id === vault.id)?.role, 'owner');
+    await admin.renameVault(vault.id, 'admin-role-renamed');
+    await admin.deleteVault(vault.id);
+  });
+
   it('Should_CopyCurrentDatabaseOnly_When_Duplicating', async () => {
     const source = await admin.createVault('dup-source');
     await admin.upload(source.id, kdbxA, 0);

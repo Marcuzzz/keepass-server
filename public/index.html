@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KeePass Server</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>KeePass Server</h1>
+    <nav id="nav" hidden>
+      <button type="button" data-view="vaults">Vaults</button>
+      <button type="button" data-view="users" id="nav-users" hidden>Users</button>
+      <button type="button" data-view="account">Account</button>
+      <button type="button" id="logout">Sign out</button>
+    </nav>
+  </header>
+  <main id="main" aria-live="polite"></main>
+  <div id="toast" role="status" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

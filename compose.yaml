@@ -1,0 +1,9 @@
+services:
+  keepass-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787" # expose through a TLS reverse proxy (Caddy, Traefik, nginx)
+    env_file: .env
+    volumes:
+      - ./data:/data

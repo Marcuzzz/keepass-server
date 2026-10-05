@@ -15,6 +15,8 @@ Self-hosted sync server for KeePass `.kdbx` databases.
 
 Read [docs/DESIGN.md](docs/DESIGN.md) for how and why, [docs/PROTOCOL.md](docs/PROTOCOL.md) for the API and the
 client sync algorithm, and [docs/CLIENTS.md](docs/CLIENTS.md) for KeePassXC and KeePassDX.
+The running server documents its API at `/api/docs` (OpenAPI 3.1: `/api/openapi.json`), with a *try it* form per
+endpoint.
 
 ## Quick start
 

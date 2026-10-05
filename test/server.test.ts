@@ -333,3 +333,28 @@ describe('groups', () => {
     assert.equal((await call(server.url, jack.token, 'PUT', `/api/v1/vaults/${vault.id}/groups/jacks`, { role: 'owner' })).status, 403);
   });
 });
+
+describe('API documentation', () => {
+  it('Should_DescribeEveryRoute_When_ServingOpenApiSpec', async () => {
+    const res = await call(server.url, undefined, 'GET', '/api/openapi.json');
+    assert.equal(res.status, 200);
+    const spec = (await res.json()) as { openapi: string; servers: Array<{ url: string }>; paths: Record<string, Record<string, unknown>> };
+    assert.equal(spec.openapi, '3.1.0');
+    const documented = Object.entries(spec.paths)
+      .flatMap(([p, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${spec.servers[0]!.url}${p.replace(/\{(\w+)\}/g, ':$1')}`))
+      .sort();
+    const routed = server.app.router.list()
+      .filter((r) => r.path.startsWith('/api/v1/'))
+      .map((r) => `${r.method} ${r.path}`)
+      .sort();
+    assert.deepEqual(documented, routed);
+  });
+
+  it('Should_ServeDocsPage_When_RequestingApiDocs', async () => {
+    const res = await call(server.url, undefined, 'GET', '/api/docs');
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') ?? '', /text\/html/);
+    assert.match(await res.text(), /api-docs\.js/);
+    assert.equal((await call(server.url, undefined, 'GET', '/api-docs.js')).status, 200);
+  });
+});

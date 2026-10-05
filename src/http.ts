@@ -27,6 +27,7 @@ export type Handler = (ctx: Ctx) => Promise<void> | void;
 
 interface Route {
   method: string;
+  path: string;
   pattern: RegExp;
   keys: string[];
   handler: Handler;
@@ -41,7 +42,11 @@ export class Router {
       keys.push(key);
       return '([^/]+)';
     });
-    this.routes.push({ method, pattern: new RegExp(`^${source}$`), keys, handler });
+    this.routes.push({ method, path, pattern: new RegExp(`^${source}$`), keys, handler });
+  }
+
+  list(): Array<{ method: string; path: string }> {
+    return this.routes.map(({ method, path }) => ({ method, path }));
   }
 
   /** Returns the handler and params, or the allowed methods when only the method does not match. */

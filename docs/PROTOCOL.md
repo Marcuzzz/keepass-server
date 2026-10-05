@@ -1,7 +1,8 @@
 # Protocol (API v1)
 
 All endpoints are under `/api/v1`. JSON in and out, except database content (`application/octet-stream`).
-Authenticated endpoints need `Authorization: Bearer <token>`. Errors look like:
+Authenticated endpoints need `Authorization: Bearer <token>`. A running server serves an OpenAPI 3.1 description at
+`/api/openapi.json` and renders it at `/api/docs` (source: `src/openapi.ts`). Errors look like:
 
 ```json
 { "error": { "code": "conflict", "message": "…", "currentRevision": 7 } }

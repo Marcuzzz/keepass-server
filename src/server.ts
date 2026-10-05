@@ -7,7 +7,8 @@ import { buildApi } from './api.ts';
 import { hashPassword } from './auth.ts';
 import type { Config } from './config.ts';
 import { type Db, now, openDatabase } from './db.ts';
-import { type Ctx, HttpError, sendError, sendJson } from './http.ts';
+import { type Ctx, HttpError, type Router, sendError, sendJson } from './http.ts';
+import { openApiSpec } from './openapi.ts';
 import { BlobStore } from './storage.ts';
 import { VaultService } from './vaults.ts';
 
@@ -32,6 +33,7 @@ export interface ServerOptions {
 
 export interface KeepassServer {
   server: http.Server;
+  router: Router;
   db: Db;
   vaults: VaultService;
   listen(): Promise<{ port: number }>;
@@ -47,9 +49,11 @@ export async function ensureBootstrapAdmin(db: Db, config: Config): Promise<bool
   return true;
 }
 
+const STATIC_ALIASES: Record<string, string> = { '/': 'index.html', '/api/docs': 'api-docs.html' };
+
 function serveStatic(ctx: Ctx): boolean {
   if (ctx.req.method !== 'GET' && ctx.req.method !== 'HEAD') return false;
-  const name = ctx.url.pathname === '/' ? 'index.html' : ctx.url.pathname.slice(1);
+  const name = STATIC_ALIASES[ctx.url.pathname] ?? ctx.url.pathname.slice(1);
   if (!/^[a-z0-9-]+\.[a-z]+$/.test(name)) return false;
   const type = STATIC_TYPES[path.extname(name)];
   const file = path.join(PUBLIC_DIR, name);
@@ -65,6 +69,7 @@ export async function createKeepassServer(config: Config, options: ServerOptions
   if (await ensureBootstrapAdmin(db, config)) options.log?.(`Created administrator "${config.bootstrapAdmin!.username}"`);
   const vaults = new VaultService(db, new BlobStore(config.dataDir), config);
   const { router, authenticate } = buildApi(db, config, vaults);
+  router.add('GET', '/api/openapi.json', (ctx) => sendJson(ctx.res, 200, openApiSpec, { 'Cache-Control': 'no-cache' }));
 
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const started = Date.now();
@@ -108,7 +113,7 @@ export async function createKeepassServer(config: Config, options: ServerOptions
   server.requestTimeout = 5 * 60_000;
 
   return {
-    server, db, vaults,
+    server, router, db, vaults,
     listen: () => new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(config.port, config.host, () => {

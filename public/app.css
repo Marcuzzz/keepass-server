@@ -45,3 +45,15 @@ a { color: var(--accent); cursor: pointer; }
 .confirm { display: inline-flex; gap: 6px; align-items: center; }
 .badge button { border: none; background: none; padding: 0 2px; line-height: 1; }
 td .badge { margin: 0 4px 4px 0; }
+/* API docs (/api/docs) */
+textarea { font: 13px/1.4 ui-monospace, Menlo, monospace; color: inherit; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 6px 8px; width: 100%; }
+pre { font: 13px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 0; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+code { font: 13px ui-monospace, Menlo, monospace; }
+details.op { border-top: 1px solid var(--line); padding: 8px 0; }
+details.op summary { cursor: pointer; }
+details.op[open] { padding-bottom: 16px; }
+.method { display: inline-block; min-width: 62px; text-align: center; font: 600 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border-radius: 4px; color: #fff; background: var(--muted); }
+.method.get { background: var(--accent); }
+.method.post, .method.put { background: var(--ok); }
+.method.delete { background: var(--danger); }
+.try { max-width: none; }
